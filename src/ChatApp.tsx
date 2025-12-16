@@ -1,0 +1,2075 @@
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { type User } from "@supabase/supabase-js"; 
+import { supabase } from "./lib/supasbaseClient"; 
+
+// -----------------------------------------------------
+// 1. CONSTANTES ET INTERFACES
+// -----------------------------------------------------
+
+// Interfaces
+interface Friend {
+  id: string; 
+  username: string;
+  avatar: string;
+}
+
+interface UserProfile {
+  id: string;
+  pseudo: string; 
+  avatar: string | null;
+}
+
+interface SearchResult {
+    id: string;
+    pseudo: string;
+    avatar: string | null;
+}
+
+interface PrivateConversation {
+    id: string; // ID de la table 'conversations'
+    targetUser: SearchResult; // L'ami avec qui on parle
+}
+
+// ⭐ INTERFACE CANAL
+interface Channel {
+    id: string; // ID UNIQUE du canal (utilisé pour le filtrage des messages)
+    name: string;
+    server_id: string; 
+}
+
+
+// ⭐ INTERFACE SERVEUR DE GROUPE
+interface GroupServer {
+    id: string; 
+    name: string;
+    icon: string; // URL de l'icône
+    members: Friend[]; // Liste des membres (simplifié)
+    channels: Channel[]; // Liste des canaux textuels du serveur
+}
+
+
+interface PrivateMessage {
+    id: string;
+    created_at: string; 
+    conversation_id: string;
+    sender_id: string; // ID de l'expéditeur (pour savoir si c'est 'moi')
+    content_text: string | null;
+    content_url: string | null;
+    content_type: 'text' | 'image' | 'file';
+}
+
+// ⭐ INTERFACE MESSAGE DE CANAL
+interface ChannelMessage {
+    id: string;
+    created_at: string;
+    // Remplacé par channel_id pour les serveurs de groupe :
+    channel_id?: string; 
+    channel?: string; // Ancien champ (nom du canal public)
+    
+    username: string; 
+    avatar: string; 
+    text: string | null; 
+    content_url: string | null;
+    content_type: 'text' | 'image' | 'file';
+}
+
+interface ChatAppProps {
+    user: User;
+    currentUserProfile: UserProfile;
+    onEditProfile: () => void;
+    onLogout: () => Promise<void>;
+}
+
+type MessageMap = Record<string, ChannelMessage[]>;
+type DmMessageMap = Record<string, PrivateMessage[]>;
+
+
+// -----------------------------------------------------
+// 2. FONCTIONS UTILITAIRES
+// -----------------------------------------------------
+const MENTION_REGEX = /@\[(.*?)\]\(user:(\S+)\)/g;
+
+function parseMessageForMentions(text: string, currentUsername: string): (string | React.JSX.Element)[] {
+    if (!text.match(MENTION_REGEX)) {
+        return [text];
+    }
+    
+    const parts: (string | React.JSX.Element)[] = [];
+    let lastIndex = 0;
+    
+    const MENTION_REGEX_EXEC = /@\[(.*?)\]\(user:(\S+)\)/g; 
+
+    text.replace(MENTION_REGEX_EXEC, (match: string, username: string, _userId: string, offset: number) => {
+        if (offset > lastIndex) {
+            parts.push(text.substring(lastIndex, offset));
+        }
+        
+        const isMentionedUser = username === currentUsername;
+
+        parts.push(
+            <span 
+                key={offset} 
+                className="message-mention"
+                style={{
+                    fontWeight: 'bold', 
+                    color: isMentionedUser ? '#ffeb3b' : '#f3e300ff', 
+                    cursor: 'pointer',
+                    backgroundColor: isMentionedUser ? 'rgba(255, 235, 59, 0.1)' : 'transparent',
+                    padding: '2px 4px',
+                    borderRadius: '4px'
+                }}
+            >
+                @{username}
+            </span>
+        );
+        
+        lastIndex = offset + match.length;
+        return match;
+    });
+    
+    if (lastIndex < text.length) {
+        parts.push(text.substring(lastIndex));
+    }
+    
+    return parts;
+}
+
+const getOrderedUserIds = (id1: string, id2: string): [string, string] => {
+    return id1 < id2 ? [id1, id2] : [id2, id1];
+};
+
+
+// -----------------------------------------------------
+// 3. LE COMPOSANT ChatApp
+// -----------------------------------------------------
+export default function ChatApp({ user: _user, currentUserProfile, onEditProfile, onLogout }: ChatAppProps) {
+  
+  const currentUserId = currentUserProfile.id; 
+  const username = currentUserProfile.pseudo;
+  const fallbackAvatar = "../Avatar/AvatarBleu.webp";
+  
+  const avatarUrl = currentUserProfile.avatar || fallbackAvatar;
+  const isWebUrl = avatarUrl.startsWith('http');
+  const cacheBuster = isWebUrl ? `?t=${Date.now()}` : '';
+  const avatar = avatarUrl + cacheBuster; 
+  
+  // HOOKS D'ÉTAT ET RÉFÉRENCE
+  const [currentChannel, setCurrentChannel] = useState<string>("général");
+  const [messages, setMessages] = useState<MessageMap>({}); 
+  const [friends, setFriends] = useState<Friend[]>([]); 
+  const [knownFriends, setKnownFriends] = useState<Friend[]>([]); // ⭐ La liste des amis persistants
+  const [input, setInput] = useState<string>(""); 
+  const [file, setFile] = useState<File | null>(null); 
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const [mentionSearch, setMentionSearch] = useState<string | null>(null);
+  const [filteredFriends, setFilteredFriends] = useState<Friend[]>([]);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [notifications, setNotifications] = useState<any[]>([]); 
+  const [unreadCount, setUnreadCount] = useState<number>(0); 
+  const [searchPseudoInput, setSearchPseudoInput] = useState<string>(""); 
+  const [searchResult, setSearchResult] = useState<SearchResult | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [isSearching, setIsSearching] = useState<boolean>(false);
+  const [activeDM, setActiveDM] = useState<PrivateConversation | null>(null);
+  const [dmMessages, setDmMessages] = useState<DmMessageMap>({});
+  const [privateConversations, setPrivateConversations] = useState<PrivateConversation[]>([]); 
+  const [unreadChannels, setUnreadChannels] = useState<Record<string, boolean>>({}); 
+  const [unreadDMs, setUnreadDMs] = useState<Record<string, boolean>>({});
+  
+  // ⭐ ÉTATS POUR LA CRÉATION ET LA NAVIGATION DANS LE SERVEUR
+  const [isCreateServerModalOpen, setIsCreateServerModalOpen] = useState<boolean>(false);
+  const [selectedFriendsForServer, setSelectedFriendsForServer] = useState<Friend[]>([]);
+  const [newServerName, setNewServerName] = useState<string>('');
+  const [groupServers, setGroupServers] = useState<GroupServer[]>([]); 
+  const [newServerIconFile, setNewServerIconFile] = useState<File | null>(null); 
+  const [activeServer, setActiveServer] = useState<GroupServer | null>(null);
+  const [activeServerChannel, setActiveServerChannel] = useState<Channel | null>(null);
+  
+  // ⭐ NOUVEAUX ÉTATS POUR LA CRÉATION DE CANAL
+  const [isCreateChannelModalOpen, setIsCreateChannelModalOpen] = useState<boolean>(false);
+  const [newChannelName, setNewChannelName] = useState<string>('');
+  
+  
+  // -----------------------------------------------------
+  // FONCTIONS DE GESTION DE SERVEUR
+  // -----------------------------------------------------
+  
+  const toggleFriendSelection = (friend: Friend) => {
+      setSelectedFriendsForServer(prev => 
+          prev.some(f => f.id === friend.id)
+              ? prev.filter(f => f.id !== friend.id)
+              : [...prev, friend]
+      );
+  };
+  
+  const handleCreateServer = async () => {
+    if (newServerName.trim().length === 0) {
+        alert("Veuillez donner un nom à votre serveur de groupe.");
+        return;
+    }
+    
+    if (selectedFriendsForServer.length === 0) {
+        alert("Veuillez sélectionner au moins un ami pour créer le serveur.");
+        return;
+    }
+
+    const trimmedName = newServerName.trim();
+    let iconUrl = '/group_icon.png'; 
+
+    try {
+        // 0. GESTION DU TÉLÉCHARGEMENT D'ICÔNE
+        if (newServerIconFile) {
+            const fileExtension = newServerIconFile.name.split('.').pop();
+            const fileName = `server-${Date.now()}-${currentUserId}.${fileExtension}`;
+            const bucket = 'server_icons'; 
+            
+            const { data: uploadData, error: uploadError } = await supabase.storage
+                .from(bucket)
+                .upload(fileName, newServerIconFile, { cacheControl: '3600', upsert: false });
+
+            if (uploadError) {
+                console.error("Erreur de téléchargement de l'icône:", uploadError);
+            } else {
+                const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(uploadData.path);
+                if (urlData) iconUrl = urlData.publicUrl;
+            }
+        }
+        
+        // 1. INSÉRER LE SERVEUR DANS group_servers
+        const { data: newServerData, error: serverError } = await supabase
+            .from('group_servers')
+            .insert({
+                name: trimmedName,
+                owner_id: currentUserId,
+                icon_url: iconUrl, 
+            })
+            .select('id, name, icon_url')
+            .single();
+
+        if (serverError || !newServerData) {
+            console.error("Erreur lors de la création du serveur:", serverError);
+            alert("Erreur de la base de données lors de la création du serveur.");
+            return;
+        }
+
+        const newServerId = newServerData.id;
+
+        // 2. CRÉER LE CANAL PAR DÉFAUT
+        const defaultChannelName = 'général';
+        const { data: newChannel, error: channelError } = await supabase
+             .from('server_channels')
+             .insert({
+                 server_id: newServerId,
+                 name: defaultChannelName
+             })
+             .select('id, name, server_id')
+             .single();
+             
+        if (channelError || !newChannel) {
+             console.error("Erreur lors de la création du canal par défaut:", channelError);
+             alert("Erreur critique: Serveur créé, mais impossible de créer le canal par défaut.");
+             return;
+        }
+        
+        const defaultChannel: Channel = newChannel as Channel;
+
+
+        // 3. PRÉPARER ET INSÉRER LES MEMBRES
+        const membersToInsert = [
+            { server_id: newServerId, user_id: currentUserId },
+            ...selectedFriendsForServer.map(friend => ({
+                server_id: newServerId,
+                user_id: friend.id
+            }))
+        ];
+
+        // 4. INSÉRER LES MEMBRES DANS group_members
+        const { error: membersError } = await supabase
+            .from('group_members')
+            .insert(membersToInsert);
+
+        if (membersError) {
+            console.error("Erreur lors de l'ajout des membres:", membersError);
+            alert("Erreur critique: Serveur créé, mais impossible d'ajouter les membres.");
+            return;
+        }
+        
+        console.log(`✅ Serveur ${trimmedName}, son canal et ses membres insérés avec succès.`);
+
+        // 5. METTRE À JOUR L'ÉTAT LOCAL
+        const newGroupServer: GroupServer = {
+            id: newServerId,
+            name: trimmedName,
+            icon: newServerData.icon_url,
+            members: selectedFriendsForServer,
+            channels: [defaultChannel] // Ajout du canal
+        };
+        
+        setGroupServers(prev => [...prev, newGroupServer]);
+        
+        // 6. Réinitialisation et fermeture
+        setNewServerName('');
+        setSelectedFriendsForServer([]);
+        setNewServerIconFile(null); 
+        setIsCreateServerModalOpen(false);
+
+        // BONUS : Sélectionner automatiquement le nouveau serveur
+        setActiveServer(newGroupServer);
+        setActiveServerChannel(defaultChannel);
+        setCurrentChannel("");
+        setActiveDM(null);
+
+    } catch (error) {
+        console.error("Erreur inattendue dans handleCreateServer:", error);
+        alert("Une erreur inattendue s'est produite.");
+    }
+  };
+  
+  const handleAddChannel = async () => {
+    if (!activeServer) {
+        alert("Erreur: Aucun serveur actif pour créer un canal.");
+        return;
+    }
+    
+    if (newChannelName.trim().length === 0) {
+        alert("Veuillez donner un nom à votre canal.");
+        return;
+    }
+
+    // Nettoyage et formatage du nom du canal (ex: 'Mon Canal' -> 'mon-canal')
+    const trimmedName = newChannelName.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    const serverId = activeServer.id;
+
+    try {
+        // 1. INSÉRER LE CANAL DANS server_channels
+        const { data: newChannelData, error: channelError } = await supabase
+             .from('server_channels')
+             .insert({
+                 server_id: serverId,
+                 name: trimmedName
+             })
+             .select('id, name, server_id')
+             .single();
+             
+        if (channelError || !newChannelData) {
+             console.error("Erreur lors de la création du nouveau canal:", channelError);
+             alert(`Erreur: ${channelError?.message || "Impossible de créer le canal."}`);
+             return;
+        }
+        
+        const newChannel: Channel = newChannelData as Channel;
+        
+        console.log(`✅ Canal #${trimmedName} créé avec succès dans le serveur ${activeServer.name}.`);
+
+        // 2. METTRE À JOUR L'ÉTAT LOCAL
+        setGroupServers(prevServers => 
+            prevServers.map(server => 
+                server.id === serverId 
+                    ? { ...server, channels: [...server.channels, newChannel] }
+                    : server
+            )
+        );
+        
+        // 3. Réinitialisation et fermeture
+        setNewChannelName('');
+        setIsCreateChannelModalOpen(false);
+        setActiveServerChannel(newChannel); // Sélectionner le nouveau canal
+
+    } catch (error) {
+        console.error("Erreur inattendue dans handleAddChannel:", error);
+        alert("Une erreur inattendue s'est produite lors de la création du canal.");
+    }
+  };
+
+  // -----------------------------------------------------
+  // FONCTIONS DE GESTION DES AMIS ET MESSAGES
+  // -----------------------------------------------------
+  
+  // ⭐ FONCTION MODIFIÉE POUR PERSISTER L'AMITIÉ DANS LA BDD
+  const handleAddFriend = async (friend: SearchResult) => {
+      // Vérification locale (pour l'UI)
+      const isAlreadyKnown = knownFriends.some(f => f.id === friend.id);
+      if (isAlreadyKnown) {
+          alert(`${friend.pseudo} est déjà dans votre liste d'amis connus.`);
+          return;
+      }
+      
+      try {
+          // --- 1. Insertion dans la BDD (table friendships) ---
+          // Utilise getOrderedUserIds pour éviter les doublons A-B et B-A
+          const [user1_id, user2_id] = getOrderedUserIds(currentUserId, friend.id);
+
+          // Insertion dans la nouvelle table friendships
+          const { error: insertError } = await supabase
+              .from('friendships')
+              .insert({ 
+                  user1_id: user1_id, 
+                  user2_id: user2_id 
+              });
+
+          if (insertError && insertError.code !== '23505') { // 23505 = violation de la contrainte UNIQUE
+              console.error("❌ Erreur lors de l'ajout de l'ami à la BDD:", insertError);
+              alert("Erreur de la base de données lors de l'ajout de l'ami.");
+              return;
+          }
+
+          // --- 2. Mise à jour de l'état local (knownFriends) ---
+          const newFriendEntry: Friend = { 
+              id: friend.id, 
+              username: friend.pseudo, 
+              avatar: friend.avatar || fallbackAvatar 
+          };
+          
+          setKnownFriends(prev => {
+              if (!prev.some(f => f.id === newFriendEntry.id)) {
+                  return [...prev, newFriendEntry];
+              }
+              return prev;
+          });
+          
+          console.log(`✅ Utilisateur ${friend.pseudo} ajouté en ami (Sauvegarde BDD OK).`);
+          
+          setSearchPseudoInput('');
+          setSearchResult(null);
+          setSearchError(null);
+          alert(`${friend.pseudo} a été ajouté à votre liste d'amis !`);
+
+      } catch (error) {
+          console.error("❌ Erreur inattendue lors de l'ajout de l'ami:", error);
+      }
+  };
+
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+  
+  const handleSearchFriend = async () => {
+    const usernameToSearch = searchPseudoInput.trim();
+    setSearchResult(null);
+    setSearchError(null);
+    
+    if (!usernameToSearch) {
+        setSearchError("Veuillez entrer un nom d'utilisateur.");
+        return;
+    }
+    
+    if (usernameToSearch.toLowerCase() === username.toLowerCase()) {
+        setSearchError("C'est vous !");
+        return;
+    }
+    
+    setIsSearching(true);
+
+    try {
+        const { data, error } = await supabase
+            .from("profiles") 
+            .select("id, username, avatar_url") 
+            .ilike("username", `${usernameToSearch}%`) 
+            .limit(1) 
+            .maybeSingle(); 
+
+        if (error) {
+            console.error("❌ ERREUR DÉTAILLÉE DE SUPABASE:", error); 
+            setSearchError("Erreur de la base de données lors de la recherche.");
+            return;
+        }
+
+        if (data) {
+            setSearchResult({
+                id: data.id,
+                pseudo: (data as any).username, 
+                avatar: (data as any).avatar_url 
+            } as SearchResult);
+        } else {
+            setSearchError(`Aucun utilisateur trouvé commençant par "${usernameToSearch}".`);
+        }
+    } catch (err) {
+        console.error("❌ Erreur inattendue:", err);
+        setSearchError("Une erreur inattendue s'est produite.");
+    } finally {
+        setIsSearching(false);
+    }
+  };
+  
+  const startPrivateChat = async (friend: SearchResult) => {
+      setSearchPseudoInput('');
+      setSearchResult(null);
+      setSearchError(null);
+      
+      const [user1_id, user2_id] = getOrderedUserIds(currentUserId, friend.id);
+
+      let conversationId: string;
+      
+      const { data: existingConv, error: fetchError } = await supabase
+          .from('conversations')
+          .select('id')
+          .eq('user1_id', user1_id)
+          .eq('user2_id', user2_id)
+          .maybeSingle();
+
+      if (fetchError) {
+          console.error("❌ Erreur de recherche de conversation:", fetchError);
+          return;
+      }
+
+      if (existingConv) {
+          conversationId = existingConv.id;
+      } else {
+          const { data: newConv, error: insertError } = await supabase
+              .from('conversations')
+              .insert({ user1_id, user2_id })
+              .select('id')
+              .single();
+          
+          if (insertError || !newConv) {
+              console.error("❌ Erreur de création de conversation:", insertError);
+              return;
+          }
+          conversationId = newConv.id;
+      }
+
+      const newActiveDM: PrivateConversation = {
+        id: conversationId,
+        targetUser: friend,
+      };
+      setActiveDM(newActiveDM);
+      setCurrentChannel(""); 
+      setActiveServer(null); 
+      setActiveServerChannel(null); 
+      
+      setPrivateConversations(prev => {
+          if (!prev.some(conv => conv.id === conversationId)) {
+              return [...prev, newActiveDM];
+          }
+          return prev; 
+      });
+      
+      setUnreadDMs(prev => ({ ...prev, [conversationId]: false }));
+
+      setTimeout(() => inputRef.current?.focus(), 0);
+  }
+  
+  const handleMarkAllAsRead = async () => {
+      if (unreadCount === 0) return;
+      
+      const { error } = await supabase
+          .from("notifications")
+          .update({ read: true })
+          .eq("recipient_id", currentUserId)
+          .eq("read", false);
+
+      if (error) {
+          console.error("❌ Erreur de mise à jour des notifications:", error);
+          return;
+      }
+
+      setNotifications((prev: any[]) => prev.map((n: any) => ({ ...n, read: true })));
+      setUnreadCount(0);
+  };
+  
+  const sendMessage = async () => {
+    // Vérifie si l'input texte n'est pas vide OU si un fichier est sélectionné
+    if (!input.trim() && !file) return;
+
+    const text = input.trim(); 
+    let contentUrl: string | null = null;
+    let contentType: string = text ? 'text' : 'file'; // Démarre à 'file' si seulement un fichier est présent
+
+    const currentFile = file; 
+    
+    setInput("");
+    setMentionSearch(null); 
+    setFile(null);
+    
+    // ÉTAPE 1: GESTION DU TÉLÉCHARGEMENT DE FICHIER (si présent)
+    if (currentFile) {
+        // Détermination du type de contenu (image/gif ou autre fichier)
+        contentType = currentFile.type.startsWith('image') ? 'image' : 'file'; 
+        
+        const fileExtension = currentFile.name.split('.').pop();
+        const fileName = `${Date.now()}-${currentUserId}.${fileExtension}`;
+        const bucket = 'chat_files'; 
+        
+        const { data: uploadData, error: uploadError } = await supabase.storage
+            .from(bucket)
+            .upload(fileName, currentFile, { cacheControl: '3600', upsert: false });
+
+        if (uploadError) {
+            console.error("❌ Erreur de téléchargement Supabase Storage :", uploadError);
+            alert("Erreur de téléchargement: " + uploadError.message);
+            return;
+        }
+        
+        const { data: urlData } = supabase.storage
+            .from(bucket)
+            .getPublicUrl(uploadData.path);
+            
+        if (!urlData || !urlData.publicUrl) {
+             console.error("❌ Erreur : URL publique introuvable après upload.");
+             return;
+        }
+        contentUrl = urlData.publicUrl;
+    }
+    
+    // ⭐ Détermine le texte à insérer (corrige l'erreur NOT NULL si seulement un fichier est envoyé)
+    const textToInsert = text || null; 
+    
+    // ÉTAPE 2: ENREGISTREMENT (DM vs. CANAL PUBLIC/SERVEUR)
+    if (activeDM) {
+        // --- DM (INSERTION DANS private_messages) ---
+        const { data, error } = await supabase.from("private_messages").insert({
+            conversation_id: activeDM.id,
+            sender_id: currentUserId,
+            content_text: textToInsert, // Peut être NULL si seulement un fichier
+            content_url: contentUrl,
+            content_type: contentType,
+        }).select('*'); 
+        
+        if (error) {
+            console.error("❌ Erreur message privé Supabase DÉTAILLÉE :", error);
+            alert("Erreur d'envoi du message privé (RLS/Colonnes?): " + error.message);
+        } else {
+            console.log("✅ DM envoyé avec succès:", data); 
+        }
+
+    } else if (activeServer && activeServerChannel) {
+        // --- SERVEUR DE GROUPE (Utilisation de channel_id pour l'unicité) ---
+        
+        const targetChannelId = activeServerChannel.id; 
+        
+        const [messageResult] = await Promise.all([
+            supabase.from("messages").insert({
+                
+                channel_id: targetChannelId, 
+                
+                username, 
+                avatar: avatarUrl, 
+                text: textToInsert, // Peut être NULL si seulement un fichier
+                content_url: contentUrl,    
+                content_type: contentType   
+            }).select('*')
+        ]);
+
+        if (messageResult.error) {
+            console.error("❌ Erreur message Serveur DÉTAILLÉE :", messageResult.error);
+            alert("Erreur message Serveur: " + messageResult.error.message); 
+        } else {
+             console.log("✅ Message Serveur envoyé avec succès:", messageResult.data); 
+        }
+        
+
+    } else {
+        // --- CANAL PUBLIC (Legacy) ---
+        
+        const textForMentions = text || `a envoyé un fichier (${currentFile?.name || 'inconnu'})`;
+        const mentionedUserIds: string[] = [];
+        const MENTION_REGEX_EXEC = /@\[(.*?)\]\(user:(\S+)\)/g; 
+        let match;
+        while ((match = MENTION_REGEX_EXEC.exec(textForMentions)) !== null) {
+            const userId = match[2];
+            mentionedUserIds.push(userId);
+        }
+        
+        const notificationsToInsert = mentionedUserIds
+            .filter(id => id !== currentUserId)
+            .map(recipientId => ({
+                recipient_id: recipientId,
+                sender_username: username,
+                message_text: textForMentions, 
+                channel: currentChannel,
+                read: false,
+            }));
+
+        const [messageResult, notificationsResult] = await Promise.all([
+            supabase.from("messages").insert({
+                channel: currentChannel, 
+                username, 
+                avatar: avatarUrl, 
+                text: textToInsert, // Peut être NULL si seulement un fichier
+                content_url: contentUrl,    
+                content_type: contentType   
+            }).select('*'), 
+            notificationsToInsert.length > 0
+                ? supabase.from("notifications").insert(notificationsToInsert)
+                : Promise.resolve({ error: null })
+        ]);
+
+        if (messageResult.error) {
+            console.error("❌ Erreur message Supabase DÉTAILLÉE :", messageResult.error);
+            alert("Erreur message (RLS/Colonnes?): " + messageResult.error.message); 
+        }
+        
+        if (notificationsResult.error) {
+             console.error("❌ Erreur notifications Supabase DÉTAILLÉE :", notificationsResult.error);
+        }
+    }
+  };
+  
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+          if (file) {
+              e.preventDefault();
+              void sendMessage();
+          } else if (filteredFriends.length > 0) {
+              e.preventDefault(); 
+              handleSelectMention(filteredFriends[0]);
+          } else {
+              void sendMessage();
+          }
+      }
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setInput(value);
+    
+    if (value.length > 0) {
+        setFile(null); 
+    }
+
+    const lastWordMatch = value.match(/(\S+)$/); 
+    if (lastWordMatch) {
+      const lastWord = lastWordMatch[0];
+
+      if (lastWord.startsWith('@') && lastWord.length > 1) {
+        const searchTerm = lastWord.substring(1);
+        setMentionSearch(searchTerm);
+        return;
+      }
+    }
+    
+    setMentionSearch(null); 
+  };
+  
+  const handleSelectMention = (friend: Friend) => {
+    const storageFormat = `@[${friend.username}](user:${friend.id})`;
+
+    const currentInput = input;
+    const lastWordMatch = currentInput.match(/(\S+)$/);
+    
+    if (lastWordMatch) {
+        const newInput = currentInput.substring(0, lastWordMatch.index) + storageFormat + ' ';
+        setInput(newInput);
+    }
+    
+    setMentionSearch(null); 
+    inputRef.current?.focus();
+  };
+  
+  // -------------------------------
+  // EFFECT HOOKS
+  // -------------------------------
+  
+  // 1. Défilement vers le bas
+  useEffect(scrollToBottom, [messages[currentChannel], activeDM, dmMessages[activeDM?.id || ''], messages[activeServerChannel?.name || '']]);
+
+  // 2. Présence et Amis Connectés
+  useEffect(() => {
+    const presenceChannel = supabase.channel("presence", {
+      config: { presence: { key: currentUserId } }
+    });
+
+    presenceChannel
+      .on("presence", { event: "sync" }, () => {
+        const state = presenceChannel.presenceState();
+        const list: Friend[] = Object.values(state).flatMap((v: unknown) => (v as Friend[]));
+        setFriends(list);
+      })
+      .subscribe((status: string) => {
+        if (status === "SUBSCRIBED") {
+          void presenceChannel.track({ 
+            id: currentUserId, 
+            username, 
+            avatar: avatarUrl 
+          }); 
+        }
+      });
+
+    return () => {
+        void supabase.removeChannel(presenceChannel);
+    }
+  }, [currentUserId, username, avatarUrl]); 
+  
+  // 3. Filtrage des Mentions
+  useEffect(() => {
+      if (mentionSearch === null) {
+          setFilteredFriends([]);
+          return;
+      }
+
+      const matches = friends
+          .filter((f: Friend) => f.id !== currentUserId)
+          .filter((f: Friend) => 
+              f.username.toLowerCase().startsWith(mentionSearch.toLowerCase())
+          )
+          .slice(0, 5);
+
+      setFilteredFriends(matches);
+  }, [mentionSearch, friends, currentUserId]);
+
+
+  // 4. Gestion des Notifications de Mention
+  useEffect(() => {
+      if (!currentUserId) return;
+      
+      (async () => {
+          const { data, error } = await supabase
+              .from("notifications")
+              .select("*")
+              .eq("recipient_id", currentUserId)
+              .order("created_at", { ascending: false });
+
+          if (error) {
+              console.error("❌ Erreur de chargement des notifications:", error);
+              return;
+          }
+
+          setNotifications(data || []);
+          setUnreadCount(data ? data.filter((n: any) => !n.read).length : 0);
+      })();
+
+      const notificationsChannel = supabase
+          .channel(`notifications-${currentUserId}`)
+          .on(
+              "postgres_changes",
+              {
+                  event: "INSERT",
+                  schema: "public",
+                  table: "notifications",
+                  filter: `recipient_id=eq.${currentUserId}`
+              },
+              (payload: { new: any, [key: string]: any }) => {
+                  setNotifications((prev: any[]) => [payload.new, ...prev]);
+                  setUnreadCount(prev => prev + 1); 
+              }
+          )
+          .subscribe();
+      
+      return () => {
+          void supabase.removeChannel(notificationsChannel);
+      };
+
+  }, [currentUserId]); 
+
+  // ⭐ 5. Chargement des Amis (via friendships) et des Conversations Privées
+  useEffect(() => {
+    if (!currentUserId) return;
+
+    const fetchFriendsAndConversations = async () => {
+        
+        // --- A. CHARGEMENT DES AMITIÉS (FRIENDSHIPS) ---
+        // Jointures pour obtenir les informations de l'ami (user1 OU user2)
+        const { data: friendshipsData, error: friendshipsError } = await supabase
+            .from('friendships')
+            .select(`
+                user1_id,
+                user2_id,
+                user1:profiles!user1_id (id, username, avatar_url),
+                user2:profiles!user2_id (id, username, avatar_url)
+            `)
+            .or(`user1_id.eq.${currentUserId},user2_id.eq.${currentUserId}`);
+            
+        if (friendshipsError) {
+            console.error("❌ Erreur de chargement des amitiés:", friendshipsError);
+            // Laisser la fonction continuer pour charger au moins les conversations
+        }
+
+        const allKnownFriends: Friend[] = [];
+        const friendIdSet = new Set<string>();
+
+        // Construit la liste des amis à partir des amitiés
+        friendshipsData?.forEach((f: any) => {
+            // Détermine l'ID de l'ami dans la relation
+            const target = f.user1.id === currentUserId ? f.user2 : f.user1;
+            
+            if (!friendIdSet.has(target.id)) {
+                allKnownFriends.push({ 
+                    id: target.id, 
+                    username: target.username, 
+                    avatar: target.avatar_url || fallbackAvatar 
+                });
+                friendIdSet.add(target.id);
+            }
+        });
+        
+        setKnownFriends(allKnownFriends); 
+        
+        // --- B. CHARGEMENT DES CONVERSATIONS PRIVÉES ---
+        // Cette partie charge les conversations, en utilisant toujours les tables 'conversations' et 'profiles'
+        const [ { data: conv1, error: error1 }, { data: conv2, error: error2 } ] = await Promise.all([
+             supabase.from('conversations').select(`
+                id,
+                user2_id,
+                user2:profiles!user2_id (id, username, avatar_url)
+            `).eq('user1_id', currentUserId),
+            
+            supabase.from('conversations').select(`
+                id,
+                user1_id,
+                user1:profiles!user1_id (id, username, avatar_url)
+            `).eq('user2_id', currentUserId)
+        ]);
+
+        if (error1 || error2) {
+            console.error("❌ Erreur de chargement des conversations privées:", error1 || error2);
+            return;
+        }
+
+        const allConversations: PrivateConversation[] = [];
+
+        conv1?.forEach((c: any) => {
+            if (c.user2) {
+                allConversations.push({ 
+                    id: c.id, 
+                    targetUser: { id: c.user2.id, pseudo: c.user2.username, avatar: c.user2.avatar_url } 
+                });
+            }
+        });
+
+        conv2?.forEach((c: any) => {
+            if (c.user1) {
+                allConversations.push({ 
+                    id: c.id, 
+                    targetUser: { id: c.user1.id, pseudo: c.user1.username, avatar: c.user1.avatar_url } 
+                });
+            }
+        });
+
+        setPrivateConversations(allConversations);
+        
+    };
+
+    void fetchFriendsAndConversations();
+    
+  }, [currentUserId]); 
+  
+  // ⭐ 6. Chargement des Serveurs de Groupe et de leurs Canaux 
+  useEffect(() => {
+    if (!currentUserId) return;
+
+    const fetchGroupServers = async () => {
+        const { data, error } = await supabase
+            .from('group_members')
+            .select(`
+                server_id,
+                server:group_servers!server_id (id, name, icon_url),
+                channels:server_channels!server_id (id, name, server_id)
+            `)
+            .eq('user_id', currentUserId); 
+
+        if (error) {
+            console.error("Erreur de chargement des serveurs de groupe:", error);
+            return;
+        }
+
+        if (data) {
+            const loadedServers: GroupServer[] = data
+                .map((item: any) => {
+                    const serverData = item.server;
+                    // Vérifier si la jointure 'server' a réussi
+                    if (!serverData) return null; 
+                    
+                    const serverChannels: Channel[] = item.channels.map((ch: any) => ({
+                        id: ch.id,
+                        name: ch.name,
+                        server_id: ch.server_id
+                    }));
+
+                    return {
+                        id: serverData.id as string, 
+                        name: serverData.name as string,
+                        icon: (serverData.icon_url || '/group_icon.png') as string,
+                        members: [] as Friend[], 
+                        channels: serverChannels.sort((a, b) => a.name.localeCompare(b.name)) 
+                    } as GroupServer; 
+                })
+                .filter((server): server is GroupServer => server !== null);
+
+                
+            setGroupServers(loadedServers);
+            
+            if (loadedServers.length > 0 && !activeServer) {
+                setActiveServer(loadedServers[0]);
+                setActiveServerChannel(loadedServers[0].channels[0] || null);
+            }
+        }
+    };
+
+    void fetchGroupServers();
+    
+  }, [currentUserId]); 
+
+  // 7. Chargement initial des messages (Canal Public - Legacy)
+  useEffect(() => {
+    if (activeDM || activeServer) return; 
+    
+    // Si vous supportez encore les anciens canaux publics:
+    (async () => {
+      const { data, error } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("channel", currentChannel) // Filtre toujours par le nom pour ces canaux
+        .order("created_at", { ascending: true });
+
+      if (error) console.error("❌ SELECT error :", error);
+
+      setMessages((prev: MessageMap) => ({
+        ...prev,
+        [currentChannel]: (data as ChannelMessage[]) || []
+      }));
+    })();
+  }, [currentChannel, activeDM, activeServer]); 
+  
+  // ⭐ 8. Chargement initial des messages (Canal de Serveur - FILTRE PAR ID)
+  useEffect(() => {
+      if (!activeServer || !activeServerChannel) return;
+      
+      const channelId = activeServerChannel.id; 
+
+      (async () => {
+        const { data, error } = await supabase
+          .from("messages")
+          .select("*")
+          .eq("channel_id", channelId) 
+          .order("created_at", { ascending: true });
+
+        if (error) console.error("❌ SELECT error Serveur :", error);
+
+        // La clé locale de la MessageMap reste le nom du canal
+        const channelKey = activeServerChannel.name; 
+        
+        setMessages((prev: MessageMap) => ({
+          ...prev,
+          [channelKey]: (data as ChannelMessage[]) || []
+        }));
+      })();
+  }, [activeServer, activeServerChannel]);
+
+
+  // ⭐ 9. Realtime pour TOUS les messages publics et de serveur (GÉRÉ PAR ID)
+  useEffect(() => {
+      
+      const publicChannel = supabase
+          .channel(`all-public-messages`) 
+          .on(
+              "postgres_changes",
+              {
+                  event: "INSERT",
+                  schema: "public",
+                  table: "messages",
+              },
+              (payload: { new: ChannelMessage, [key: string]: any }) => {
+                  const incomingMessage = payload.new;
+                  
+                  const incomingChannelId = incomingMessage.channel_id;
+                  let targetChannelName: string | undefined = undefined;
+                  
+                  // 1. Essayer de trouver le nom basé sur l'ID (pour les serveurs de groupe)
+                  if (incomingChannelId) {
+                      for (const server of groupServers) {
+                          const channel = server.channels.find(ch => ch.id === incomingChannelId);
+                          if (channel) {
+                              targetChannelName = channel.name;
+                              break;
+                          }
+                      }
+                  } 
+                  
+                  // 2. Fallback pour les anciens canaux publics (basé sur le nom)
+                  if (!targetChannelName && incomingMessage.channel) {
+                      targetChannelName = incomingMessage.channel;
+                  }
+
+                  if (!targetChannelName) {
+                      return; // Message non identifiable
+                  }
+                  
+                  // Utilise le nom trouvé pour mettre à jour l'état local
+                  setMessages((prev: MessageMap) => {
+                      const messagesForChannel = prev[targetChannelName!] || [];
+                      return {
+                          ...prev,
+                          [targetChannelName!]: [...messagesForChannel, incomingMessage]
+                      };
+                  });
+              }
+          )
+          .subscribe();
+      
+      return () => {
+          void supabase.removeChannel(publicChannel);
+      }
+  }, [activeDM, username, activeServer, activeServerChannel, groupServers]); 
+
+  
+  // 10. Realtime (DM) et Chargement initial des DMs
+  useEffect(() => {
+    if (!currentUserId) return;
+    
+    const dmChannel = supabase
+        .channel(`all-private-messages`)
+        .on(
+            "postgres_changes",
+            {
+                event: "INSERT",
+                schema: "public",
+                table: "private_messages",
+            },
+            (payload: { new: PrivateMessage, [key: string]: any }) => { 
+                const incomingMessage = payload.new;
+                const conversationId = incomingMessage.conversation_id;
+                
+                setDmMessages((prev) => ({
+                    ...prev,
+                    [conversationId]: [...(prev[conversationId] || []), incomingMessage]
+                }));
+                
+                const isActive = activeDM && activeDM.id === conversationId;
+                
+                if (incomingMessage.sender_id !== currentUserId && !isActive) {
+                    setUnreadDMs(prev => ({ ...prev, [conversationId]: true }));
+                }
+            }
+        )
+        .subscribe();
+    
+    
+    if (activeDM) {
+        const conversationId = activeDM.id;
+
+        (async () => {
+            const { data, error } = await supabase
+                .from("private_messages")
+                .select("*")
+                .eq("conversation_id", conversationId)
+                .order("created_at", { ascending: true });
+
+            if (error) console.error("❌ SELECT error DM :", error);
+
+            setDmMessages((prev) => ({
+                ...prev,
+                [conversationId]: (data as PrivateMessage[]) || []
+            }));
+        })();
+    }
+
+    return () => {
+        void supabase.removeChannel(dmChannel);
+    };
+    
+  }, [activeDM, currentUserId]); 
+
+
+  // -----------------------------------------------------
+  // 4. Rendu JSX
+  // -----------------------------------------------------
+  
+  const targetChannelKey = activeServerChannel?.name || currentChannel;
+  
+  const currentMessages = activeDM 
+    ? dmMessages[activeDM.id] || [] 
+    : messages[targetChannelKey] || [];
+  
+  const chatHeaderTitle = activeDM 
+    ? `Conversation avec @${activeDM.targetUser.pseudo}` 
+    : activeServerChannel
+    ? `#${activeServerChannel.name} de ${activeServer?.name}`
+    : `#${currentChannel}`;
+
+  const totalUnreadDMs = privateConversations.reduce((count, conv) => {
+      return count + (unreadDMs[conv.id] ? 1 : 0);
+  }, 0);
+  
+  const connectedIds = friends.map(f => f.id);
+  const onlineFriends = useMemo(() => knownFriends
+      .filter(f => f.id !== currentUserId && connectedIds.includes(f.id))
+      .sort((a, b) => a.username.localeCompare(b.username)),
+      [knownFriends, connectedIds, currentUserId]
+  );
+
+  const offlineFriends = useMemo(() => knownFriends
+      .filter(f => f.id !== currentUserId && !connectedIds.includes(f.id))
+      .sort((a, b) => a.username.localeCompare(b.username)),
+      [knownFriends, connectedIds, currentUserId]
+  );
+  
+  const availableFriendsForServer = useMemo(() => knownFriends.filter(f => f.id !== currentUserId), [knownFriends, currentUserId]);
+
+
+  return (
+    <div className="discord-app">
+      <div className="background"></div>
+
+      {/* MODAL DE CRÉATION DE SERVEUR DE GROUPE */}
+      {isCreateServerModalOpen && (
+        <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
+            backgroundColor: 'rgba(0, 0, 0, 0.7)', 
+            zIndex: 100, 
+            display: 'flex', 
+            justifyContent: 'center', 
+            alignItems: 'center'
+        }}>
+            <div style={{ 
+                backgroundColor: '#2f3136', 
+                borderRadius: '8px', 
+                padding: '30px', 
+                width: '450px',
+                maxHeight: '80vh',
+                display: 'flex',
+                flexDirection: 'column'
+            }}>
+                <h2 style={{ color: '#fff', marginBottom: '20px' }}>Créer un nouveau Serveur de Groupe</h2>
+                
+                {/* Nom du Serveur */}
+                <input
+                    type="text"
+                    placeholder="Nom du Serveur (ex: Projet Alpha)"
+                    value={newServerName}
+                    onChange={(e) => setNewServerName(e.target.value)}
+                    style={{ padding: '10px', marginBottom: '15px', borderRadius: '4px', border: '1px solid #4f545c', backgroundColor: '#36393f', color: '#fff' }}
+                />
+                
+                {/* SÉLECTION DE L'ICÔNE */}
+                <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <h3 style={{ color: '#dcddde', fontSize: '14px' }}>
+                        Icône du Serveur :
+                    </h3>
+                    <label 
+                        htmlFor="server-icon-upload"
+                        style={{ 
+                            padding: '8px 15px', 
+                            backgroundColor: newServerIconFile ? '#4CAF50' : '#5865f2', 
+                            color: 'white', 
+                            borderRadius: '4px', 
+                            cursor: 'pointer',
+                            fontSize: '12px'
+                        }}
+                    >
+                        {newServerIconFile ? `✅ ${newServerIconFile.name.substring(0, 15)}...` : "Choisir un fichier"}
+                    </label>
+                    <input
+                        type="file"
+                        id="server-icon-upload"
+                        style={{ display: 'none' }}
+                        accept="image/*"
+                        onChange={(e) => {
+                            if (e.target.files && e.target.files.length > 0) {
+                                setNewServerIconFile(e.target.files[0]);
+                            }
+                        }}
+                    />
+                </div>
+                
+                {/* Sélecteur d'Amis */}
+                <h3 style={{ color: '#dcddde', fontSize: '14px', marginBottom: '10px' }}>
+                    Sélectionnez des Amis ({selectedFriendsForServer.length})
+                </h3>
+                <div style={{ overflowY: 'auto', maxHeight: '250px', marginBottom: '20px', paddingRight: '10px' }}>
+                    {availableFriendsForServer.map((friend) => {
+                        const isSelected = selectedFriendsForServer.some(f => f.id === friend.id);
+                        return (
+                            <div 
+                                key={friend.id}
+                                onClick={() => toggleFriendSelection(friend)}
+                                style={{
+                                    display: 'flex', 
+                                    alignItems: 'center', 
+                                    padding: '10px', 
+                                    marginBottom: '5px',
+                                    borderRadius: '4px',
+                                    backgroundColor: isSelected ? '#5865f2' : '#36393f',
+                                    color: 'white',
+                                    cursor: 'pointer',
+                                    transition: 'background-color 0.1s'
+                                }}
+                            >
+                                <img 
+                                    src={friend.avatar} 
+                                    alt={`${friend.username} avatar`} 
+                                    style={{ width: '30px', height: '30px', borderRadius: '50%', marginRight: '10px' }}
+                                />
+                                <span style={{ flexGrow: 1 }}>{friend.username}</span>
+                                {isSelected ? '✅' : '➕'}
+                            </div>
+                        );
+                    })}
+                </div>
+
+                {/* Boutons d'Action */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                    <button 
+                        onClick={() => setIsCreateServerModalOpen(false)}
+                        style={{ padding: '10px 20px', backgroundColor: '#747f8d', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                    >
+                        Annuler
+                    </button>
+                    <button 
+                        onClick={() => void handleCreateServer()} 
+                        disabled={newServerName.trim().length === 0 || selectedFriendsForServer.length === 0}
+                        style={{ padding: '10px 20px', backgroundColor: '#4CAF50', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                    >
+                        Créer le Serveur
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* MODAL D'AJOUT DE CANAL TEXTUEL */}
+      {isCreateChannelModalOpen && activeServer && (
+        <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
+            backgroundColor: 'rgba(0, 0, 0, 0.7)', 
+            zIndex: 100, 
+            display: 'flex', 
+            justifyContent: 'center', 
+            alignItems: 'center'
+        }}>
+            <div style={{ 
+                backgroundColor: '#2f3136', 
+                borderRadius: '8px', 
+                padding: '30px', 
+                width: '400px',
+                display: 'flex',
+                flexDirection: 'column'
+            }}>
+                <h2 style={{ color: '#fff', marginBottom: '20px' }}>Créer un canal dans {activeServer.name}</h2>
+                
+                <h3 style={{ color: '#dcddde', fontSize: '14px', marginBottom: '8px' }}>Nom du canal (ex: `#dev-frontend`)</h3>
+                <input
+                    type="text"
+                    placeholder="Nouveau-canal"
+                    value={newChannelName}
+                    onChange={(e) => setNewChannelName(e.target.value.replace(/[^a-zA-Z0-9-]/g, ''))} // Permet seulement lettres, chiffres et tirets
+                    style={{ padding: '10px', marginBottom: '15px', borderRadius: '4px', border: '1px solid #4f545c', backgroundColor: '#36393f', color: '#fff' }}
+                />
+                
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
+                    <button 
+                        onClick={() => setIsCreateChannelModalOpen(false)}
+                        style={{ padding: '10px 20px', backgroundColor: '#747f8d', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                    >
+                        Annuler
+                    </button>
+                    <button 
+                        onClick={() => void handleAddChannel()}
+                        disabled={newChannelName.trim().length === 0}
+                        style={{ padding: '10px 20px', backgroundColor: '#4CAF50', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                    >
+                        Créer le Canal
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
+
+      {/* 1. DM Sidebar (Colonne la plus à gauche - FIXE 240px) */}
+      <div 
+          className="dm-sidebar" 
+          style={{ 
+              position: 'relative', 
+              width: '240px', 
+              minWidth: '240px', 
+              transition: 'none', 
+              overflow: 'hidden' 
+          }}
+      >
+        
+        <div style={{ 
+            padding: '10px', 
+            flexGrow: 1, 
+            overflowY: 'auto',
+        }}>
+            
+            {/* --- SECTION DES MESSAGES PRIVÉS --- */}
+            
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', marginTop: '0' }}> 
+                <h3 style={{ color: '#fff', fontSize: '14px' }}>Messages Privés</h3>
+                {totalUnreadDMs > 0 && (
+                     <span style={{ 
+                        backgroundColor: '#ff4d4f', 
+                        color: 'white', 
+                        borderRadius: '10px',
+                        padding: '2px 8px',
+                        fontSize: '10px',
+                        fontWeight: 'bold',
+                    }}>
+                        {totalUnreadDMs}
+                    </span>
+                )}
+            </div>
+
+            {/* Liste des conversations privées 1-contre-1 */}
+            {privateConversations.map((conv) => (
+                <div 
+                    key={conv.id}
+                    onClick={() => { 
+                        setCurrentChannel(""); 
+                        setActiveDM(conv); 
+                        setActiveServer(null); 
+                        setActiveServerChannel(null); 
+                        setUnreadDMs(prev => ({ ...prev, [conv.id]: false }));
+                    }}
+                    style={{ 
+                        background: (activeDM?.id === conv.id) ? '#5865f2' : (unreadDMs[conv.id] ? '#40444b' : 'transparent'), 
+                        borderRadius: '4px',
+                        padding: '6px 8px',
+                        marginBottom: '6px',
+                        cursor: 'pointer',
+                        color: (activeDM?.id === conv.id) ? 'white' : '#dcddde',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        transition: 'background-color 0.15s'
+                    }}
+                    onMouseEnter={(e) => { 
+                        if (activeDM?.id !== conv.id) e.currentTarget.style.backgroundColor = '#3e4147'; 
+                    }}
+                    onMouseLeave={(e) => { 
+                        if (activeDM?.id !== conv.id) e.currentTarget.style.backgroundColor = (unreadDMs[conv.id] ? '#40444b' : 'transparent');
+                    }}
+                >
+                    <div style={{ display: 'flex', alignItems: 'center', overflow: 'hidden' }}>
+                        <img 
+                            src={conv.targetUser.avatar || fallbackAvatar}
+                            alt={`${conv.targetUser.pseudo} avatar`}
+                            style={{ width: '28px', height: '28px', borderRadius: '50%', marginRight: '8px', objectFit: 'cover' }}
+                        />
+                        <span style={{ 
+                            fontWeight: unreadDMs[conv.id] ? 'bold' : 'normal',
+                            overflow: 'hidden', 
+                            textOverflow: 'ellipsis', 
+                            whiteSpace: 'nowrap',
+                            fontSize: '13px'
+                        }}>
+                            {conv.targetUser.pseudo}
+                        </span>
+                    </div>
+                    {unreadDMs[conv.id] && (
+                        <span style={{ 
+                            backgroundColor: '#f84a4a', 
+                            borderRadius: '50%',
+                            minWidth: '8px', 
+                            height: '8px',
+                            display: 'block',
+                            flexShrink: 0
+                        }}></span>
+                    )}
+                </div>
+            ))}
+            
+            {/* --- SECTION DES SERVEURS DE GROUPE --- */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', marginTop: '20px', borderTop: '1px solid #1e2022', paddingTop: '10px' }}> 
+                <h3 style={{ color: '#fff', fontSize: '14px' }}>Serveurs de Groupe</h3>
+                
+                {/* BOUTON : Créer un serveur/groupe */}
+                <button 
+                    onClick={() => setIsCreateServerModalOpen(true)}
+                    style={{ 
+                        backgroundColor: '#5865f2', 
+                        color: 'white', 
+                        border: 'none', 
+                        borderRadius: '4px',
+                        padding: '3px 8px',
+                        fontSize: '10px',
+                        cursor: 'pointer'
+                    }}
+                    title="Créer un nouveau serveur de groupe"
+                >
+                    + Serveur
+                </button>
+            </div>
+            
+            {/* Liste des serveurs de groupe */}
+            {groupServers.map((server) => (
+                <div 
+                    key={server.id}
+                    onClick={() => {
+                        setActiveServer(server); 
+                        setActiveServerChannel(server.channels[0] || null); 
+                        setCurrentChannel(""); 
+                        setActiveDM(null);
+                    }}
+                    style={{ 
+                        background: activeServer?.id === server.id ? '#4f545c' : 'transparent', 
+                        borderRadius: '4px',
+                        padding: '6px 8px',
+                        marginBottom: '6px',
+                        cursor: 'pointer',
+                        color: activeServer?.id === server.id ? 'white' : '#dcddde', 
+                        display: 'flex',
+                        alignItems: 'center',
+                        transition: 'background-color 0.15s'
+                    }}
+                    onMouseEnter={(e) => { 
+                        if (activeServer?.id !== server.id) e.currentTarget.style.backgroundColor = '#3e4147'; 
+                    }}
+                    onMouseLeave={(e) => { 
+                         if (activeServer?.id !== server.id) e.currentTarget.style.backgroundColor = 'transparent'; 
+                    }}
+                >
+                    <img 
+                        src={server.icon}
+                        alt={`${server.name} icon`}
+                        style={{ width: '28px', height: '28px', borderRadius: '50%', marginRight: '8px', objectFit: 'cover' }}
+                    />
+                    <span style={{ 
+                        fontWeight: activeServer?.id === server.id ? 'bold' : 'normal',
+                        overflow: 'hidden', 
+                        textOverflow: 'ellipsis', 
+                        whiteSpace: 'nowrap',
+                        fontSize: '13px'
+                    }}>
+                        {server.name}
+                    </span>
+                </div>
+            ))}
+        </div>
+        
+      </div>
+
+
+      {/* 2. Channel List (Deuxième colonne - 240px) */}
+      <div className="channel-list" style={{ display: 'flex', flexDirection: 'column' }}>
+        
+        {/* LOGO BLOOP AGRANDIT FIXÉ EN HAUT DE LA COLONNE DES CANAUX */}
+        <div 
+            className="server-logo-fixed"
+            style={{ 
+                padding: '20px 10px', 
+                borderBottom: '1px solid #1e2022',
+                textAlign: 'center',
+                flexShrink: 0
+            }}
+        >
+            <h2 style={{ color: '#fff', fontSize: '20px', fontWeight: 'bold', marginBottom: '10px' }}>
+            
+            </h2>
+            <img 
+                className="logo" 
+                src="/logo.png" 
+                alt="Logo Bloop" 
+                style={{ width: '250px', height: '85px', borderRadius: '0%', objectFit: 'cover'}}
+            />
+        </div>
+        
+        {/* LISTE DES CANAUX (Conteneur principal) */}
+        <ul style={{ flexGrow: 1, padding: '10px', overflowY: 'auto' }}>
+            
+            {/* Titre dynamique */}
+            <h3 style={{ color: '#fff', fontSize: '14px', padding: '5px 0' }}>
+                {activeServer ? `Canaux de ${activeServer.name}` : 'Canaux Publics (Legacy)'}
+            </h3>
+            
+            {activeServer ? (
+                // --- Affichage des canaux du serveur de groupe ---
+                activeServer.channels.map((ch: Channel) => (
+                    <li
+                        key={ch.id}
+                        onClick={() => { 
+                            setActiveServerChannel(ch); 
+                            setCurrentChannel(""); 
+                            setActiveDM(null); 
+                        }}
+                        style={{
+                            background: activeServerChannel?.id === ch.id ? "#5865f2" : "transparent",
+                            borderRadius: "5px",
+                            padding: "5px 10px",
+                            cursor: 'pointer',
+                            color: activeServerChannel?.id === ch.id ? 'white' : '#fff',
+                            fontWeight: 'normal',
+                            display: 'flex', 
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: '4px'
+                        }}
+                    >
+                        # {ch.name}
+                    </li>
+                ))
+            ) : (
+                // --- Affichage des canaux publics par défaut (si vous les conservez) ---
+                ["général", "discussion", "projets"].map((ch: string) => (
+                    <li
+                        key={ch}
+                        onClick={() => { 
+                            setCurrentChannel(ch); 
+                            setActiveServer(null); 
+                            setActiveServerChannel(null); 
+                            setActiveDM(null); 
+                            setUnreadChannels(prev => ({ ...prev, [ch]: false }));
+                        }}
+                        style={{
+                            background: (currentChannel === ch && !activeDM) ? "#00d9ff" : (unreadChannels[ch] ? "#40444b" : "transparent"),
+                            borderRadius: "5px",
+                            padding: "5px 10px",
+                            cursor: 'pointer',
+                            color: (currentChannel === ch && !activeDM) ? '#1e2022' : '#fff',
+                            fontWeight: unreadChannels[ch] ? 'bold' : 'normal',
+                            display: 'flex', 
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: '4px'
+                        }}
+                    >
+                        # {ch}
+                        {unreadChannels[ch] && (
+                            <span style={{ 
+                                backgroundColor: '#f84a4a', 
+                                borderRadius: '50%',
+                                minWidth: '8px', 
+                                height: '8px',
+                                marginLeft: '10px',
+                                display: 'block'
+                            }}></span>
+                        )}
+                    </li>
+                ))
+            )}
+            
+            {/* Si un serveur est actif, bouton pour ajouter un canal (ouvre la modal) */}
+            {activeServer && (
+                <button 
+                    onClick={() => setIsCreateChannelModalOpen(true)}
+                    style={{
+                        marginTop: '10px',
+                        width: '100%', 
+                        padding: '6px', 
+                        backgroundColor: '#5865f2', 
+                        color: 'white', 
+                        border: 'none', 
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '12px'
+                    }}
+                >
+                    + Ajouter Canal
+                </button>
+            )}
+        </ul>
+        
+        {/* FIXÉ EN BAS : Section inférieure pour Recherche d'Amis et Profil */}
+        <div style={{ padding: '10px', borderTop: '1px solid #1e2022', flexShrink: 0 }}>
+            
+            {/* SECTION DE RECHERCHE D'AMI PAR PSEUDO */}
+            <div style={{ marginBottom: '15px' }}>
+                <h3 style={{ color: '#fff', fontSize: '14px', marginBottom: '8px' }}>🔍 Trouver un Ami</h3>
+                
+                <div style={{ display: 'flex', marginBottom: '5px' }}>
+                    <input
+                        type="text"
+                        placeholder="Pseudo de l'utilisateur"
+                        value={searchPseudoInput}
+                        onChange={(e) => setSearchPseudoInput(e.target.value)} 
+                        onKeyDown={(e) => { 
+                            if (e.key === 'Enter') { 
+                                void handleSearchFriend();
+                            }
+                        }}
+                        style={{ flexGrow: 1, padding: '8px', border: 'none', borderRadius: '4px 0 0 4px', backgroundColor: '#36393f', color: '#fff', fontSize: '12px' }}
+                    />
+                    <button 
+                        onClick={() => void handleSearchFriend()}
+                        disabled={isSearching || !searchPseudoInput.trim()}
+                        style={{ 
+                            padding: '8px 12px', 
+                            backgroundColor: '#5865f2', 
+                            color: 'white', 
+                            border: 'none', 
+                            borderRadius: '0 4px 4px 0',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        {isSearching ? '...' : 'Go'}
+                    </button>
+                </div>
+                
+                {searchError && (
+                    <div style={{ color: '#ff4d4f', padding: '5px', fontSize: '12px' }}>{searchError}</div>
+                )}
+                
+                {searchResult && (
+                    <div 
+                        className="friend-search-result"
+                        style={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            padding: '10px', 
+                            backgroundColor: '#2f3136', 
+                            borderRadius: '4px',
+                            marginTop: '5px'
+                        }}
+                    >
+                        <img 
+                            src={searchResult.avatar || fallbackAvatar} 
+                            alt={`${searchResult.pseudo} avatar`} 
+                            style={{ width: '32px', height: '32px', borderRadius: '50%', marginRight: '10px', objectFit: 'cover' }}
+                        />
+                        <span style={{ color: '#fff', fontWeight: 'bold', fontSize: '14px', flexGrow: 1 }}>
+                            {searchResult.pseudo}
+                        </span>
+                        
+                        {/* Bouton Ajouter en Ami */}
+                        <button 
+                            onClick={() => handleAddFriend(searchResult)} 
+                            style={{ 
+                                marginLeft: '10px', 
+                                padding: '4px 8px', 
+                                backgroundColor: '#00bcd4', 
+                                color: 'white', 
+                                border: 'none', 
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontSize: '12px'
+                            }}
+                            title={`Ajouter ${searchResult.pseudo} à votre liste d'amis.`}
+                        >
+                            ➕ Ami
+                        </button>
+                        
+                        {/* Bouton Message existant */}
+                        <button 
+                            onClick={() => startPrivateChat(searchResult)} 
+                            style={{ 
+                                marginLeft: '5px', 
+                                padding: '4px 8px', 
+                                backgroundColor: '#4CAF50', 
+                                color: 'white', 
+                                border: 'none', 
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontSize: '12px'
+                            }}
+                            title={`Démarrer une conversation privée avec ${searchResult.pseudo}.`}
+                        >
+                            ✉️ Message
+                        </button>
+                    </div>
+                )}
+            </div>
+            
+            {/* PROFIL UTILISATEUR WIDGET ET BOUTONS */}
+            <div className="user-profile-widget" style={{ 
+                display: 'flex', 
+                flexDirection: 'column', 
+                padding: '10px', 
+                backgroundColor: '#292b2f',
+                borderRadius: '5px'
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '10px' }}>
+                    <img 
+                        src={avatar} 
+                        alt={`${username} avatar`} 
+                        style={{ 
+                            width: '32px', 
+                            height: '32px', 
+                            borderRadius: '50%', 
+                            objectFit: 'cover',
+                            marginRight: '8px' 
+                        }}
+                    />
+                    <span style={{ 
+                        color: '#fff', 
+                        fontWeight: 'bold',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                    }}>
+                        {username}
+                    </span>
+                </div>
+                
+                <button 
+                    onClick={onEditProfile}
+                    style={{
+                        width: '100%', 
+                        padding: '6px', 
+                        backgroundColor: '#5865f2', 
+                        color: 'white', 
+                        border: 'none', 
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        marginBottom: '5px', 
+                        display: 'flex',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        fontSize: '12px'
+                    }}
+                >
+                    ⚙️ Modifier Profil 
+                    {unreadCount > 0 && (
+                        <span style={{ 
+                            marginLeft: '8px', 
+                            backgroundColor: '#ff4d4f', 
+                            color: 'white', 
+                            borderRadius: '50%',
+                            padding: '2px 7px',
+                            fontSize: '10px',
+                            fontWeight: 'bold'
+                        }}>
+                            {unreadCount}
+                        </span>
+                    )}
+                </button>
+                
+                {unreadCount > 0 && (
+                    <button 
+                        onClick={handleMarkAllAsRead}
+                        style={{
+                            width: '100%', 
+                            padding: '4px', 
+                            backgroundColor: '#4CAF50', 
+                            color: 'white', 
+                            border: 'none', 
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            marginBottom: '5px',
+                            fontSize: '12px'
+                        }}
+                    >
+                        Marquer les mentions comme lues
+                    </button>
+                )}
+                
+                <button 
+                    onClick={onLogout}
+                    style={{
+                        width: '100%', 
+                        padding: '6px', 
+                        backgroundColor: '#dc3545', 
+                        color: 'white', 
+                        border: 'none', 
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '12px'
+                    }}
+                >
+                    🚪 Déconnexion
+                </button>
+            </div>
+            
+        </div>
+      </div>
+
+      {/* 3. MESSAGES (Zone principale - 1fr) */}
+      <div className="chat-area">
+        <div className="chat-header" style={{ padding: '10px', borderBottom: '1px solid #1e2022' }}>
+            <h2 style={{ color: '#fff', fontSize: '18px' }}>
+                {chatHeaderTitle}
+            </h2>
+        </div>
+        
+        <div className="messages">
+          {currentMessages.map((m: any, idx: number) => {
+            
+            const isMe = activeDM 
+                ? m.sender_id === currentUserId 
+                : m.username === username;       
+                
+            const nameToDisplay = activeDM
+                ? (isMe ? username : activeDM.targetUser.pseudo)
+                : m.username;
+
+            const avatarToDisplay = activeDM
+                ? (isMe ? avatar : activeDM.targetUser.avatar || fallbackAvatar)
+                : m.avatar; 
+
+            const messageText = activeDM ? m.content_text : m.text;
+
+            return (
+              <div
+                key={m.id || idx}
+                className={"message-container " + (isMe ? "message-right" : "message-left")}
+              >
+                <div className="message-bubble">
+                  <img src={avatarToDisplay} className="msg-avatar" alt={`${nameToDisplay} avatar`} />
+                  <div className="msg-content">
+                    <div className="msg-header">
+                      {!isMe && <span className="msg-username">{nameToDisplay}</span>}
+                      
+                      <span className="msg-time">
+                        {new Date(m.created_at).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                    </div>
+                    <div className="msg-text">
+                        {/* RENDU DE L'IMAGE / FICHIER TÉLÉCHARGÉ */}
+                        {m.content_url && (m.content_type === 'image' || m.content_type === 'file') && (
+                            <img 
+                                src={m.content_url} 
+                                alt={messageText || "contenu image/gif"} 
+                                // Styles pour les GIFs et Images
+                                style={{ 
+                                    maxWidth: '100%', 
+                                    maxHeight: '300px', 
+                                    borderRadius: '8px',
+                                    marginBottom: (messageText && m.content_url) ? '10px' : '0', 
+                                    objectFit: 'contain'
+                                }}
+                            />
+                        )}
+                        {/* RENDU DU TEXTE AVEC MENTIONS */}
+                        {messageText && parseMessageForMentions(messageText, username)} 
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          <div ref={messagesEndRef}></div>
+        </div>
+
+        {/* INPUT AREA */}
+        <div className="input-area" style={{ position: 'relative', display: 'flex', alignItems: 'center', padding: '10px' }}>
+            
+            {/* Boîte de suggestion de mention */}
+            {mentionSearch !== null && filteredFriends.length > 0 && (
+                <div className="mention-suggestion-box" style={{ 
+                    position: 'absolute',
+                    bottom: 'calc(100% + 5px)', 
+                    left: '10px',
+                    backgroundColor: '#36393f',
+                    borderRadius: '4px',
+                    width: 'calc(100% - 20px)',
+                    boxShadow: '0 0 10px rgba(0,0,0,0.5)',
+                    zIndex: 10
+                }}>
+                    {filteredFriends.map((f: Friend) => (
+                        <div 
+                            key={f.id} 
+                            onClick={() => handleSelectMention(f)}
+                            style={{
+                                padding: '8px 12px',
+                                cursor: 'pointer',
+                                color: '#fff',
+                                display: 'flex',
+                                alignItems: 'center'
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#474b52'}
+                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#36393f'}
+                        >
+                            <img 
+                                src={f.avatar} 
+                                alt={`${f.username} avatar`} 
+                                style={{ width: '24px', height: '24px', borderRadius: '50%', marginRight: '10px' }}
+                            />
+                            <span>{f.username}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+            
+            {/* INPUT DE FICHIER (Bouton/Icône) */}
+            <label 
+                htmlFor="file-upload" 
+                title={file ? `Fichier sélectionné : ${file.name}` : "Joindre une image/GIF"}
+                style={{ 
+                    cursor: 'pointer', 
+                    marginRight: '10px', 
+                    fontSize: '24px', 
+                    color: file ? '#4CAF50' : '#888' 
+                }}
+            >
+                📎
+            </label>
+            <input
+                type="file"
+                id="file-upload"
+                style={{ display: 'none' }}
+                accept="image/*, .gif" 
+                onChange={(e) => {
+                    if (e.target.files && e.target.files.length > 0) {
+                        setFile(e.target.files[0]);
+                        setInput(""); 
+                        setMentionSearch(null); 
+                    }
+                }}
+            />
+            
+            {/* Input de Message */}
+            <input
+                ref={inputRef}
+                type="text"
+                placeholder={activeDM 
+                    ? `Message privé à ${activeDM.targetUser.pseudo}...${file ? ` (Fichier prêt: ${file.name})` : ''}` 
+                    : activeServerChannel
+                    ? `Message #${activeServerChannel.name} de ${activeServer?.name}...${file ? ` (Fichier prêt: ${file.name})` : ''}`
+                    : `Message #${currentChannel}...${file ? ` (Fichier prêt: ${file.name})` : ''}`}
+                value={input}
+                onChange={handleInputChange} 
+                onKeyDown={handleKeyDown} 
+                disabled={false} 
+                style={{ position: 'relative', flexGrow: 1 }} 
+            />
+            
+            {/* Si un fichier est sélectionné, bouton pour annuler */}
+            {file && (
+                <button 
+                    onClick={() => setFile(null)} 
+                    style={{ marginRight: '10px', backgroundColor: '#dc3545', padding: '10px 15px' }}
+                >
+                    X
+                </button>
+            )}
+            
+            <button 
+                onClick={() => void sendMessage()} 
+                disabled={!input.trim() && !file}
+                style={{ padding: '10px 15px' }}
+            >
+                Envoyer
+            </button>
+        </div>
+      </div>
+
+      {/* 4. AMIS (Dernière colonne - 240px) */}
+      <div className="friends-list" style={{ display: 'flex', flexDirection: 'column' }}>
+        
+        {/* Affichage des amis en ligne (Online Friends) */}
+        <h2 style={{ fontSize: '16px', color: '#fff', padding: '10px', borderBottom: '1px solid #1e2022' }}>
+            Amis en ligne — {onlineFriends.length}
+        </h2>
+        <div style={{ maxHeight: '45%', overflowY: 'auto' }}>
+            {onlineFriends.length > 0 ? (
+                onlineFriends.map((f: Friend, i: number) => (
+                    <div key={i} className="friend" style={{ display: 'flex', alignItems: 'center', padding: '8px', cursor: 'pointer' }}>
+                        <div className="friend-avatar-wrapper" style={{ position: 'relative', marginRight: '10px' }}>
+                            <img src={f.avatar} alt={`${f.username} avatar`} style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }} /> 
+                            <span className="friend-status" style={{ position: 'absolute', bottom: '0', right: '0', width: '10px', height: '10px', backgroundColor: '#43b581', borderRadius: '50%', border: '2px solid #2f3136' }}></span>
+                        </div>
+                        <span className="friend-name" style={{ color: '#fff' }}>{f.username}</span>
+                    </div>
+                ))
+            ) : (
+                <p style={{ color: '#aaa', padding: '10px' }}>Personne en ligne.</p>
+            )}
+        </div>
+
+        {/* Affichage des amis hors ligne (Offline Friends) */}
+        <h2 style={{ fontSize: '16px', color: '#fff', padding: '10px', borderTop: '1px solid #1e2022', borderBottom: '1px solid #1e2022' }}>
+            Amis hors ligne — {offlineFriends.length}
+        </h2>
+        <div style={{ flexGrow: 1, overflowY: 'auto' }}>
+            {offlineFriends.length > 0 ? (
+                offlineFriends.map((f: Friend, i: number) => (
+                    <div key={i} className="friend" style={{ display: 'flex', alignItems: 'center', padding: '8px' }}>
+                        <div className="friend-avatar-wrapper" style={{ position: 'relative', marginRight: '10px' }}>
+                            <img src={f.avatar} alt={`${f.username} avatar`} style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }} /> 
+                            <span className="friend-status" style={{ position: 'absolute', bottom: '0', right: '0', width: '10px', height: '10px', backgroundColor: '#747f8d', borderRadius: '50%', border: '2px solid #2f3136' }}></span>
+                        </div>
+                        <span style={{ color: '#8e9297' }}>{f.username}</span>
+                        </div>
+                ))
+            ) : (
+                <p style={{ color: '#aaa', padding: '10px' }}>Pas d'autres amis connus hors ligne.</p>
+            )}
+        </div>
+      </div>
+    </div>
+  );
+}

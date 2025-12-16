@@ -1,0 +1,235 @@
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  color: #fff;
+}
+
+.discord-app {
+  display: flex;
+  height: 100vh;
+}
+
+/* Sidebar channels - 20% */
+.sidebar {
+  width: 20%;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Chat area - 60% */
+.chat-area {
+  width: 60%;
+  display: flex;
+  flex-direction: column;
+  background-color: #262a3050;
+}
+
+/* Friend list - 20% */
+.friends-list {
+  width: 20%;
+  padding: 1rem;
+}
+
+.friends-list h2 {
+  margin-top: 0;
+  font-size: 1.1rem;
+  color: #b9bbbe;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Conteneur d'un ami */
+.friend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0.6rem 0;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.friend:hover {
+  background-color: #2f3136;
+}
+
+/* Avatar + cercle en ligne */
+.friend-avatar-wrapper {
+  position: relative;
+}
+
+.friend-avatar-wrapper img {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+}
+
+/* Pastille verte "online" */
+.friend-status {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 12px;
+  height: 12px;
+  background: #3ba55d;
+  border-radius: 50%;
+  border: 3px solid #202225;
+}
+
+/* Nom de l'ami */
+.friend-name {
+  font-size: 1.05rem;
+  color: #fff;
+}
+
+/* Channels */
+.sidebar ul {
+  list-style: none;
+  padding: 0;
+}
+
+.sidebar li {
+  padding: 0.5rem 0;
+  cursor: pointer;
+}
+
+.sidebar li:hover {
+  background-color: #40444b;
+  border-radius: 5px;
+}
+
+/* Messages */
+.messages {
+  flex: 1;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+/* =============================== */
+/*        MESSAGES ALIGNÉS         */
+/* =============================== */
+
+.message-container {
+  display: flex;
+  width: 100%;
+  margin-bottom: 1rem;
+}
+
+/* Messages des autres → gauche */
+.message-left {
+  justify-content: flex-start;
+}
+
+/* Tes messages → droite */
+.message-right {
+  justify-content: flex-end;
+}
+
+/* Bulle commune */
+.message-bubble {
+  max-width: 65%;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background-color: #2f3136;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+/* Bulle de TES messages */
+.message-right .message-bubble {
+  background-color: #00d9ff;
+  flex-direction: row-reverse; /* Avatar à droite */
+}
+
+/* Avatar dans message */
+.msg-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+}
+
+/* Contenu vertical */
+.msg-content {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Ligne pseudo + temps */
+.msg-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+/* Pseudo */
+.msg-username {
+  font-weight: bold;
+  color: #fff;
+  font-size: 0.92rem;
+}
+
+/* Horodatage */
+.msg-time {
+  font-size: 0.75rem;
+  color: #ffffff;
+}
+
+/* Texte du message */
+.msg-text {
+  font-size: 1rem;
+  color: #fff;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+/* =============================== */
+/*           INPUT ZONE            */
+/* =============================== */
+
+.input-area {
+  display: flex;
+  padding: 1rem;
+}
+
+.input-area input {
+  flex: 1;
+  padding: 0.5rem;
+  border: none;
+  border-radius: 5px;
+  margin-right: 0.5rem;
+  background-color: #2f3136;
+  color: #fff;
+  outline: none;
+}
+
+.input-area button {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 5px;
+  background-color: #00d9ff;
+  color: #fff;
+}
+
+/* Logo du serveur */
+.logo {
+  width: auto;
+  height: 80px;
+  display: flex;
+  margin: 2rem auto 2rem auto;
+}
+
+/* LOGIN utilisateur (dans la sidebar) */
+.user-profile {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.user-profile img {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  margin-bottom: 0.5rem;
+}
