@@ -2,7 +2,7 @@ import { useState } from "react";
 import { createClient, type User } from "@supabase/supabase-js";
 
 // 1. IMPORTATION DE TON IMAGE
-// Remplace './ton-image.jpg' par le nom exact de ton fichier (ex: './background.png') Maison
+// Remplace './ton-image.jpg' par le nom exact de ton fichier (ex: './background.png') Test
 import MonImageDeFond from "../public/icon.png"; 
 
 const supabase = createClient(

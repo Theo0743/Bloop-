@@ -6,7 +6,7 @@
   width: 100vw;
 
   /* Gestion de l'image */
-  
+  background-image: url('../public//icon.png'); /* Chemin vers ton image */
   background-size: 50% 50%; /* L'image prend 50% de la largeur et 50% de la hauteur */  background-position: center; /* L'image reste centrée au redimensionnement */
   background-repeat: no-repeat;
   background-attachment: fixed; /* L'image ne défile pas avec le contenu */
