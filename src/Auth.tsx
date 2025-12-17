@@ -1,10 +1,10 @@
-// AuthPanel.tsx
-
 import { useState } from "react";
 import { createClient, type User } from "@supabase/supabase-js";
 
-// ⭐ ATTENTION : Pour le Fast Refresh de Vite, importez supabase d'un fichier séparé
-// comme nous l'avons fait précédemment, au lieu de le recréer ici.
+// 1. IMPORTATION DE TON IMAGE
+// Remplace './ton-image.jpg' par le nom exact de ton fichier (ex: './background.png')
+import MonImageDeFond from "../public/icon.png"; 
+
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
   import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -21,39 +21,30 @@ export default function AuthPanel({ onLogin }: AuthPanelProps) {
   const [username, setUsername] = useState("");
   const [error, setError] = useState("");
 
-  // Connexion
   const handleLogin = async () => {
     setError("");
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
-
     if (error) return setError(error.message);
     if (data.user) onLogin(data.user);
   };
 
-  // Inscription
   const handleRegister = async () => {
     setError("");
-
     if (!username.trim()) return setError("Le pseudo est requis.");
-
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      options: {
-        data: { username },
-      },
+      options: { data: { username } },
     });
-
     if (error) return setError(error.message);
     if (data.user) onLogin(data.user);
   };
   
-  // ⭐ NOUVEAU : Fonction unique pour gérer la soumission du formulaire
   const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault(); // Empêche le rechargement standard de la page
+    e.preventDefault();
     if (mode === "login") {
       void handleLogin();
     } else {
@@ -62,7 +53,21 @@ export default function AuthPanel({ onLogin }: AuthPanelProps) {
   };
 
   return (
-    <div className="auth-wrapper">
+    <div 
+      className="auth-wrapper"
+      style={{
+        // 2. UTILISATION DE L'IMAGE IMPORTÉE
+        backgroundImage: `linear-gradient(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.4)), url(${MonImageDeFond})`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat',
+        minHeight: '100vh',
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
       <div className="auth-box">
         <h2>{mode === "login" ? "Connexion" : "Inscription"}</h2>
 
@@ -81,7 +86,6 @@ export default function AuthPanel({ onLogin }: AuthPanelProps) {
           </button>
         </div>
 
-        {/* ⭐ CORRECTION : Utilisation de la balise <form> avec onSubmit */}
         <form onSubmit={handleSubmit}>
           {mode === "register" && (
             <div className="auth-input">
@@ -102,7 +106,7 @@ export default function AuthPanel({ onLogin }: AuthPanelProps) {
               placeholder="email@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              required // Ajout de required pour une meilleure UX
+              required
             />
           </div>
 
@@ -113,20 +117,16 @@ export default function AuthPanel({ onLogin }: AuthPanelProps) {
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              required // Ajout de required
+              required
             />
           </div>
 
           {error && <p className="auth-error">{error}</p>}
 
-          <button
-            className="auth-button"
-            type="submit" // ⭐ CRUCIAL : Définit le bouton pour soumettre le formulaire
-          >
+          <button className="auth-button" type="submit">
             {mode === "login" ? "Se connecter" : "Créer un compte"}
           </button>
         </form> 
-        {/* ⭐ FIN DE LA BALISE <form> */}
       </div>
     </div>
   );

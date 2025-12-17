@@ -1,235 +1,324 @@
-body {
-  margin: 0;
-  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-  color: #fff;
-}
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+  body {
+      margin: 0;
+      font-family: 'Inter', sans-serif; /* Remplacement par Inter pour une meilleure uniformité */
+      color: #fff;
+      /* background-color: #202225 */
+  }
+  /* Votre CSS existant (adapté pour se fondre dans le thème) */
+  .discord-app {
+      display: flex;
+      height: 100vh;
+  }
 
-.discord-app {
-  display: flex;
-  height: 100vh;
-}
+  /* Sidebar channels - 20% */
+  .sidebar {
+      width: 20%;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
 
-/* Sidebar channels - 20% */
-.sidebar {
-  width: 20%;
-  padding: 1rem;
-  display: flex;
-  flex-direction: column;
-}
+  }
 
-/* Chat area - 60% */
-.chat-area {
-  width: 60%;
-  display: flex;
-  flex-direction: column;
-  background-color: #262a3050;
-}
+  /* Chat area - 60% */
+  .chat-area {
+      flex: 1; /* Utiliser flex: 1 pour s'adapter dynamiquement */
+      display: flex;
+      flex-direction: column;
+            border-left: 1px solid #202225;
+border-right: 1px solid #202225;
+  }
 
-/* Friend list - 20% */
-.friends-list {
-  width: 20%;
-  padding: 1rem;
-}
+  /* Friend list - 20% */
+  .friends-list {
+      width: 20%;
+      padding: 1rem;
+  }
 
-.friends-list h2 {
-  margin-top: 0;
-  font-size: 1.1rem;
-  color: #b9bbbe;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
+  .friends-list h2 {
+      margin-top: 0;
+      font-size: 1.1rem;
+      color: #b9bbbe;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+  }
 
-/* Conteneur d'un ami */
-.friend {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0.6rem 0;
-  cursor: pointer;
-  border-radius: 6px;
-}
+  /* Conteneur d'un ami */
+  .friend {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0.6rem 0.5rem;
+      cursor: pointer;
+      border-radius: 6px;
+      transition: background-color 0.15s ease-in-out;
+  }
 
-.friend:hover {
-  background-color: #2f3136;
-}
+  .friend:hover {
+      background-color: #40444b; /* Couleur de survol plus claire */
+  }
 
-/* Avatar + cercle en ligne */
-.friend-avatar-wrapper {
-  position: relative;
-}
+  /* Avatar + cercle en ligne */
+  .friend-avatar-wrapper {
+      position: relative;
+  }
 
-.friend-avatar-wrapper img {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-}
+  .friend-avatar-wrapper img {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      object-fit: cover;
+  }
 
-/* Pastille verte "online" */
-.friend-status {
-  position: absolute;
-  bottom: 2px;
-  right: 2px;
-  width: 12px;
-  height: 12px;
-  background: #3ba55d;
-  border-radius: 50%;
-  border: 3px solid #202225;
-}
+  /* Pastille verte "online" */
+  .friend-status {
+      position: absolute;
+      bottom: 0px; /* Ajusté pour mieux s'aligner */
+      right: 0px; /* Ajusté */
+      width: 14px;
+      height: 14px;
+      background: #3ba55d;
+      border-radius: 50%;
+      border: 3px solid #2f3136; /* Bordure de la couleur du conteneur parent */
+  }
 
-/* Nom de l'ami */
-.friend-name {
-  font-size: 1.05rem;
-  color: #fff;
-}
+  /* Nom de l'ami */
+  .friend-name {
+      font-size: 1.05rem;
+      color: #fff;
+      font-weight: 500;
+  }
 
-/* Channels */
-.sidebar ul {
-  list-style: none;
-  padding: 0;
-}
+  /* Channels */
+  .sidebar ul {
+      list-style: none;
+      padding: 0;
+  }
 
-.sidebar li {
-  padding: 0.5rem 0;
-  cursor: pointer;
-}
+  .sidebar li {
+      padding: 0.5rem 0.5rem;
+      cursor: pointer;
+      border-radius: 5px;
+      margin-bottom: 4px;
+      transition: background-color 0.15s ease-in-out;
+      color: #b9bbbe; /* Couleur par défaut des liens */
+  }
+  .sidebar li.active {
+      background-color: #40444b;
+      color: #fff;
+      font-weight: 600;
+  }
 
-.sidebar li:hover {
-  background-color: #40444b;
-  border-radius: 5px;
-}
+  .sidebar li:not(.active):hover {
+      background-color: #36393f; /* Couleur de survol */
+      color: #dcddde;
+  }
 
-/* Messages */
-.messages {
-  flex: 1;
-  padding: 1rem;
-  overflow-y: auto;
-}
+  /* Messages */
+  .messages {
+      flex: 1;
+      padding: 1rem;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+  }
 
-/* =============================== */
-/*        MESSAGES ALIGNÉS         */
-/* =============================== */
+  /* =============================== */
+  /* MESSAGES ALIGNÉS        */
+  /* =============================== */
 
-.message-container {
-  display: flex;
-  width: 100%;
-  margin-bottom: 1rem;
-}
+  .message-container {
+      display: flex;
+      width: 100%;
+  }
 
-/* Messages des autres → gauche */
-.message-left {
-  justify-content: flex-start;
-}
+  /* Messages des autres → gauche */
+  .message-left {
+      justify-content: flex-start;
+  }
 
-/* Tes messages → droite */
-.message-right {
-  justify-content: flex-end;
-}
+  /* Tes messages → droite */
+  .message-right {
+      justify-content: flex-end;
+  }
 
-/* Bulle commune */
-.message-bubble {
-  max-width: 65%;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background-color: #2f3136;
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-}
+  /* Bulle commune */
+  .message-bubble {
+      max-width: 65%;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background-color: #2f3136;
+      box-shadow: 0 1px 0 0 rgba(0, 0, 0, 0.1);
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+  }
 
-/* Bulle de TES messages */
-.message-right .message-bubble {
-  background-color: #00d9ff;
-  flex-direction: row-reverse; /* Avatar à droite */
-}
+  /* Bulle de TES messages */
+  .message-right .message-bubble {
+      background-color: #56aaff; /* Utilisation d'une couleur plus subtile que le cyan vif */
+      flex-direction: row-reverse; /* Avatar à droite */
+  }
+  .message-right .msg-text {
+      color: #fff;
+  }
 
-/* Avatar dans message */
-.msg-avatar {
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-}
+  /* Avatar dans message */
+  .msg-avatar {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      object-fit: cover;
+  }
 
-/* Contenu vertical */
-.msg-content {
-  display: flex;
-  flex-direction: column;
-}
+  /* Contenu vertical */
+  .msg-content {
+      display: flex;
+      flex-direction: column;
+  }
 
-/* Ligne pseudo + temps */
-.msg-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 3px;
-}
+  /* Ligne pseudo + temps */
+  .msg-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 3px;
+  }
 
-/* Pseudo */
-.msg-username {
-  font-weight: bold;
-  color: #fff;
-  font-size: 0.92rem;
-}
+  /* Pseudo */
+  .msg-username {
+      font-weight: bold;
+      color: #fff;
+      font-size: 0.92rem;
+  }
+  .message-right .msg-username {
+      color: #dcddde; /* Moins d'importance pour son propre nom */
+  }
 
-/* Horodatage */
-.msg-time {
-  font-size: 0.75rem;
-  color: #ffffff;
-}
 
-/* Texte du message */
-.msg-text {
-  font-size: 1rem;
-  color: #fff;
-  white-space: normal;
-  word-break: break-word;
-  overflow-wrap: break-word;
-}
+  /* Horodatage */
+  .msg-time {
+      font-size: 0.75rem;
+      color: #b9bbbe;
+  }
 
-/* =============================== */
-/*           INPUT ZONE            */
-/* =============================== */
+  /* Texte du message */
+  .msg-text {
+      font-size: 1rem;
+      color: #dcddde;
+      white-space: normal;
+      word-break: break-word;
+      overflow-wrap: break-word;
+  }
 
-.input-area {
-  display: flex;
-  padding: 1rem;
-}
+  /* =============================== */
+  /* INPUT ZONE             */
+  /* =============================== */
 
-.input-area input {
-  flex: 1;
-  padding: 0.5rem;
-  border: none;
-  border-radius: 5px;
-  margin-right: 0.5rem;
-  background-color: #2f3136;
-  color: #fff;
-  outline: none;
-}
+  .input-area {
+      display: flex;
+      padding: 1rem;
+  }
 
-.input-area button {
-  padding: 0.5rem 1rem;
-  border: none;
-  border-radius: 5px;
-  background-color: #00d9ff;
-  color: #fff;
-}
+  .input-area input {
+      flex: 1;
+      padding: 0.75rem 1rem;
+      border: none;
+      border-radius: 8px;
+      margin: 0.5rem;
+      background-color: #40444b;
+      color: #dcddde;
+      outline: none;
+      transition: background-color 0.15s ease-in-out;
+  }
+  .input-area input:focus {
+      background-color: #4f545c;
+  }
 
-/* Logo du serveur */
-.logo {
-  width: auto;
-  height: 80px;
-  display: flex;
-  margin: 2rem auto 2rem auto;
-}
+  .input-area button {
+      padding: 0.75rem 1.25rem;
+      border: none;
+      border-radius: 8px;
+      background-color: #56aaff; /* Bleu uniforme et moderne */
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 0.15s ease-in-out;
+  }
+  .input-area button:hover {
+      background-color: #6366f1;
+  }
 
-/* LOGIN utilisateur (dans la sidebar) */
-.user-profile {
-  text-align: center;
-  margin-bottom: 2rem;
-}
+  /* Logo du serveur */
+  .logo {
+      width: auto;
+      height: 80px;
+      display: flex;
+      margin: 2rem auto 2rem auto;
+  }
 
-.user-profile img {
-  width: 60px;
-  height: 60px;
-  border-radius: 50%;
-  margin-bottom: 0.5rem;
-}
+  /* LOGIN utilisateur (dans la sidebar) */
+  .user-profile {
+      text-align: center;
+      margin-top: auto; /* Pousser en bas de la sidebar */
+      padding-top: 1rem;
+      border-top: 1px solid #36393f;
+  }
+
+  .user-profile img {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      margin-bottom: 0.5rem;
+      object-fit: cover;
+  }
+
+  .user-profile-name {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #fff;
+  }
+  .user-profile-status {
+      font-size: 0.85rem;
+      color: #b9bbbe;
+  }
+
+  /* Rendre l'interface réactive */
+  @media (max-width: 1024px) {
+      .discord-app {
+          flex-direction: column;
+      }
+      .sidebar {
+          width: 100%;
+          height: auto;
+          order: 1;
+          flex-direction: row;
+          justify-content: center;
+          gap: 1rem;
+          padding: 0.5rem 1rem;
+          align-items: center;
+      }
+      .sidebar ul {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.5rem;
+          margin-top: 0;
+          margin-bottom: 0;
+      }
+      .sidebar li {
+          padding: 0.3rem 0.6rem;
+          margin-bottom: 0;
+      }
+      .friends-list {
+          display: none; /* Cache la liste d'amis sur mobile pour gagner de la place */
+      }
+      .chat-area {
+          width: 100%;
+          order: 2;
+          height: calc(100vh - 120px); /* Ajuster la hauteur */
+      }
+      .logo, .user-profile {
+          display: none; /* Cacher ces éléments sur mobile */
+      }
+  }

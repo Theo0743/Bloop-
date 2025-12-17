@@ -1,88 +1,143 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+
 .auth-wrapper {
-  height: 100vh;
+  /* L'image prend toute la place disponible */
+  min-height: 100vh;
   width: 100vw;
-  background: #2f3136;
+
+  /* Gestion de l'image */
+  
+  background-size: 50% 50%; /* L'image prend 50% de la largeur et 50% de la hauteur */  background-position: center; /* L'image reste centrée au redimensionnement */
+  background-repeat: no-repeat;
+  background-attachment: fixed; /* L'image ne défile pas avec le contenu */
+
+  /* Centrage du formulaire par-dessus */
   display: flex;
   align-items: center;
   justify-content: center;
 }
+/* Conteneur Plein Écran */
+.auth-wrapper {
+  height: 100vh;
+  width: 100vw;
+  /* Utilisation de la couleur de la sidebar pour le fond (cohérence) */
+  background: #2f3136;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Inter', sans-serif;
+}
 
+/* Boîte d'Authentification */
 .auth-box {
   width: 420px;
+  /* Utilisation de la couleur de la zone de chat (cohérence) */
   background: #36393f;
   padding: 30px;
-  border-radius: 8px;
-  box-shadow: 0 6px 18px #00000050;
+  border-radius: 10px; /* Coins légèrement plus arrondis */
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   text-align: center;
 }
 
 .auth-box h2 {
   color: white;
-  margin-bottom: 20px;
+  margin-bottom: 25px;
+  font-size: 1.8rem;
+  font-weight: 700;
 }
 
+/* Onglets (Connexion/Inscription) */
 .auth-tabs {
   display: flex;
   justify-content: space-around;
-  margin-bottom: 25px;
+  margin-bottom: 30px;
+  border-bottom: 1px solid #40444b;
 }
 
 .auth-tabs button {
   flex: 1;
-  padding: 10px;
+  padding: 12px 10px;
   background: none;
   color: #b9bbbe;
   border: none;
   cursor: pointer;
-  font-size: 1rem;
+  font-size: 1.05rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
   border-bottom: 2px solid transparent;
+}
+.auth-tabs button:hover:not(.active) {
+    color: #dcddde;
+    background-color: #40444b20;
 }
 
 .auth-tabs .active {
   color: white;
-  border-bottom: 2px solid #00d9ff;
+  /* Utilisation de la couleur d'action principale (Bleu Indigo) */
+  border-bottom: 2px solid #4f46e5;
+  font-weight: 600;
 }
 
+/* Champs de Saisie */
 .auth-input {
   text-align: left;
-  margin-bottom: 15px;
+  margin-bottom: 20px;
 }
 
 .auth-input label {
   color: #b9bbbe;
   font-size: 0.9rem;
+  font-weight: 500;
+  display: block;
+  margin-bottom: 5px;
 }
 
 .auth-input input {
   width: 100%;
-  padding: 10px;
+  padding: 12px;
+  /* Utilisation de la couleur la plus sombre pour l'input (cohérence) */
   background: #202225;
-  border: none;
-  border-radius: 5px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   color: white;
-  margin-top: 5px;
+  box-sizing: border-box;
+  font-size: 1rem;
+  transition: border-color 0.2s ease;
 }
 
+.auth-input input:focus {
+    border-color: #4f46e5;
+    outline: none;
+}
+
+/* Bouton d'Action */
 .auth-button {
   width: 100%;
-  padding: 12px;
-  background: #00d9ff;
+  padding: 14px;
+  /* Utilisation de la couleur d'action principale (Bleu Indigo) */
+  background: #4f46e5;
   border: none;
-  border-radius: 5px;
+  border-radius: 8px;
   color: white;
   cursor: pointer;
-  font-weight: bold;
-  margin-top: 10px;
+  font-weight: 700;
+  font-size: 1.1rem;
+  margin-top: 15px;
+  transition: background 0.2s ease;
 }
 
 .auth-button:hover {
-  background: #00b4d4;
+  /* Utilisation de la couleur de survol Indigo (cohérence) */
+  background: #6366f1;
 }
 
+/* Message d'Erreur */
 .auth-error {
-  background: #ff4444;
-  padding: 10px;
-  border-radius: 5px;
-  margin-top: 10px;
+  background: #da4444; /* Un rouge d'erreur un peu plus doux */
+  padding: 12px;
+  border-radius: 8px;
+  margin-top: 20px;
   color: white;
+  font-size: 0.95rem;
+  font-weight: 500;
 }

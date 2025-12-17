@@ -1,22 +1,25 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../src/lib/supasbaseClient.ts"; 
 import { type User } from "@supabase/supabase-js";
 
 import AuthPanel from "./Auth.tsx"; 
 import ChatApp from "./ChatApp.tsx"; 
-import EditProfile from "../src/components/EditProfile.tsx"; 
+import EditProfile, { avatars } from "../src/components/EditProfile.tsx"; 
 import "./App.css";
 import "./Auth.css";
 
-// Définition des états de vue possibles
+// Définition des constantes et types
 type CurrentView = 'chat' | 'profile_edit' | 'auth';
+type UserStatus = 'online' | 'idle' | 'offline'; // Les statuts possibles
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
-// --- Définition du Type de Profil ---
+// --- Définition du Type de Profil (CORRIGÉ) ---
 interface UserProfile {
   id: string;
-  // NOTE: On utilise 'pseudo' dans l'état local pour le composant EditProfile
   pseudo: string; 
   avatar: string | null;
+  // ✅ CORRECTION: Ajout du statut à l'interface
+  status: UserStatus; 
 }
 
 export default function App() {
@@ -24,37 +27,59 @@ export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null); 
   const [currentView, setCurrentView] = useState<CurrentView>('auth');
   const [isLoading, setIsLoading] = useState(true);
+  
+  // NOUVEL ÉTAT: Gestion du statut de l'utilisateur (la valeur actuelle)
+  const [userStatus, setUserStatus] = useState<UserStatus>('offline');
+
+  // ⭐ FONCTION STABLE: Pour mettre à jour le statut dans la DB
+  const updateUserStatus = useCallback(async (status: UserStatus, userId: string) => {
+    if (!userId) return;
+    
+    // IMPORTANT: Cela met à jour le champ 'status' dans la table 'profiles'
+    const { error } = await supabase
+        .from('profiles')
+        .update({ status: status })
+        .eq('id', userId);
+
+    if (error) {
+        console.error(`Erreur lors de la mise à jour du statut vers ${status}:`, error.message);
+    } else {
+        // Mise à jour de l'état local APRES succès DB
+        setUserStatus(status); 
+    }
+  }, []);
 
   // ⭐ FONCTION UTILITAIRE POUR CHARGER LE PROFIL DEPUIS LA BASE DE DONNÉES
   const fetchUserProfile = async (currentUser: User): Promise<UserProfile> => {
-    // 1. Récupérer le profil depuis la table 'profiles'
-    // ✅ AMÉLIORATION: Utilise .limit(1) au lieu de .single() pour une meilleure gestion des cas où le profil n'existe pas ou en cas d'erreur 406.
     const { data, error } = await supabase
       .from('profiles')
-      .select('username, avatar_url') 
+      .select('username, avatar_url, status') 
       .eq('id', currentUser.id)
       .limit(1);
 
-    // Vérification de l'erreur RLS ou de colonne
     if (error) { 
-        console.error("Erreur critique lors du chargement du profil (vérifiez RLS ou colonnes):", error.message);
-        // Fallback en cas d'échec de la récupération
+        console.error("Erreur critique lors du chargement du profil:", error.message);
+        // Fallback en cas d'erreur (DOIT inclure 'status')
         return {
             id: currentUser.id,
             pseudo: currentUser.email?.split('@')[0] || "NouvelUtilisateur",
             avatar: null,
+            status: 'offline', 
         };
     }
 
-    // Le profil existe (data est un tableau)
     const profileData = data?.[0];
+    
+    // Déterminer le statut initial : on force 'online' si la DB n'a rien ou 'offline'
+    const initialStatus: UserStatus = (profileData?.status === 'online' || profileData?.status === 'idle') 
+                            ? profileData.status 
+                            : 'online';
 
     return {
         id: currentUser.id,
-        // ✅ Utilise profileData.username pour hydrater l'état 'pseudo'
         pseudo: profileData?.username || currentUser.email?.split('@')[0] || "NouvelUtilisateur",
-        // ✅ Utilise profileData.avatar_url
         avatar: profileData?.avatar_url || null, 
+        status: initialStatus, // ✅ Statut initial
     };
   };
 
@@ -64,10 +89,18 @@ export default function App() {
     setUserProfile(profile);
     setCurrentView('chat'); 
     setIsLoading(false);
+    
+    // À la connexion, on force le statut 'online' dans la DB
+    updateUserStatus('online', currentUser.id); 
   };
   
-  // ✅ Nouvelle fonction de déconnexion (Inchangé)
+  // ✅ Fonction de déconnexion
   const handleLogout = async () => {
+    if (user) {
+        // Mettre à jour le statut dans la DB vers 'offline' avant de déconnecter
+        await updateUserStatus('offline', user.id); 
+    }
+    
     setIsLoading(true);
     const { error } = await supabase.auth.signOut();
     if (error) {
@@ -75,12 +108,57 @@ export default function App() {
       setIsLoading(false);
       return;
     }
+    
     setUser(null);
     setUserProfile(null);
     setCurrentView('auth');
     setIsLoading(false);
   };
 
+  // --------------------------------------------------------------------------------------
+  // ⭐ NOUVEL EFFECT: DÉTECTION D'INACTIVITÉ
+  // --------------------------------------------------------------------------------------
+  useEffect(() => {
+    if (!user || currentView !== 'chat') return; 
+
+    let activityTimer: number;
+
+    const setIdle = () => {
+        // Si le timer expire et que nous ne sommes pas déjà 'idle' ou 'offline'
+        if (userStatus === 'online') {
+            updateUserStatus('idle', user.id);
+        }
+    };
+
+    const handleActivity = () => {
+        clearTimeout(activityTimer);
+        
+        // Si le statut actuel n'est pas 'online' et que nous sommes connectés, le remettre à jour
+        if (userStatus !== 'online' && userStatus !== 'offline') { 
+            updateUserStatus('online', user.id);
+        }
+
+        // Réinitialiser le timer
+        activityTimer = setTimeout(setIdle, IDLE_TIMEOUT_MS) as unknown as number;
+    };
+
+    const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart'];
+
+    events.forEach(event => {
+        window.addEventListener(event, handleActivity);
+    });
+    
+    handleActivity(); // Démarrer le timer immédiatement
+
+    // Fonction de nettoyage (cleanup)
+    return () => {
+        clearTimeout(activityTimer);
+        events.forEach(event => {
+            window.removeEventListener(event, handleActivity);
+        });
+    };
+  }, [user, userStatus, currentView, updateUserStatus]);
+  
   // ✅ useEffect pour vérifier la session au montage
   useEffect(() => {
     const checkSession = async () => {
@@ -92,32 +170,28 @@ export default function App() {
       }
     };
     checkSession();
-  }, []); // Dépendance vide
+  }, []); 
 
 
   // --------------------------------------------------------------------------------------
-  // 🚀 LOGIQUE DE SAUVEGARDE DU PROFIL (CORRIGÉE ET COMPLÉTÉE)
+  // 🚀 LOGIQUE DE SAUVEGARDE DU PROFIL 
   // --------------------------------------------------------------------------------------
   const handleProfileSave = async (formData: FormData) => {
     if (!user || !userProfile) return;
 
     const newPseudo = formData.get('pseudo') as string;
-    // Récupérer la valeur, qui peut être un File, une string (chemin), ou null
     const newAvatarInput = formData.get('avatar'); 
-    let newAvatarUrl = userProfile.avatar; // Conserver l'ancienne URL par défaut
+    let newAvatarUrl = userProfile.avatar; 
 
-    setIsLoading(true); // Afficher un indicateur de chargement
+    setIsLoading(true);
 
     try {
-        // --- 1. GESTION DE L'AVATAR ---
-        // Cas 1: L'utilisateur a uploadé un NOUVEAU fichier
+        // ... (Logique d'upload de fichier/sélection d'avatar par défaut) ...
         if (newAvatarInput instanceof File && newAvatarInput.size > 0) {
-            console.log("Cas 1: Traitement de l'upload de fichier.");
             const fileExt = newAvatarInput.name.split('.').pop();
             const fileName = `${user.id}-${Date.now()}.${fileExt}`;
-            const filePath = `avatars/${fileName}`; // Dossier 'avatars'
+            const filePath = `avatars/${fileName}`; 
 
-            // Upload vers Supabase Storage
             const { error: uploadError } = await supabase.storage
                 .from('avatars') 
                 .upload(filePath, newAvatarInput, {
@@ -125,63 +199,49 @@ export default function App() {
                     upsert: true,
                 });
 
-            if (uploadError) {
-                console.error("Erreur d'upload Supabase:", uploadError);
-                throw uploadError;
-            }
+            if (uploadError) throw uploadError;
 
-            // Récupérer l'URL publique
             const { data: publicUrlData } = supabase.storage
                 .from('avatars')
                 .getPublicUrl(filePath);
 
-            console.log("URL Publique Récupérée:", publicUrlData.publicUrl); // LOG
             newAvatarUrl = publicUrlData.publicUrl;
         
-        // Cas 2: L'utilisateur a sélectionné un avatar PAR DÉFAUT (chemin string)
-        } else if (typeof newAvatarInput === 'string' && newAvatarInput.startsWith('/avatars')) {
-            console.log("Cas 2: Avatar par défaut sélectionné:", newAvatarInput); // LOG
-            // Le chemin de l'avatar par défaut est directement l'URL finale à enregistrer
+        } else if (typeof newAvatarInput === 'string' && avatars.includes(newAvatarInput)) {
             newAvatarUrl = newAvatarInput;
             
-        // Cas 3: Ni fichier ni changement d'avatar par défaut (laisse newAvatarUrl inchangé)
         } else {
-            console.log("Cas 3: Avatar non modifié. URL conservée:", newAvatarUrl); // LOG
+            if (typeof newAvatarInput === 'string' && newAvatarInput !== '') {
+                newAvatarUrl = newAvatarInput;
+            } else {
+                newAvatarUrl = userProfile.avatar;
+            }
         } 
-
-        // Log avant la mise à jour de la DB pour vérifier la valeur finale
-        console.log("Valeur finale d'avatar_url envoyée à la DB:", newAvatarUrl); // LOG
         
         // --- 2. MISE À JOUR DU PROFIL DANS LA BASE DE DONNÉES (SUPABASE DB) ---
-        // Utilisation de upsert pour créer ou mettre à jour la ligne
         const { error: updateError } = await supabase
             .from('profiles')
             .upsert({ 
-                id: user.id, // Requis pour l'upsert
+                id: user.id, 
                 username: newPseudo,
-                avatar_url: newAvatarUrl, // <-- La nouvelle URL/chemin (ou l'ancienne)
+                avatar_url: newAvatarUrl, 
+                status: userStatus, // ⭐ On s'assure de conserver le statut actuel lors de la MAJ du profil
             }, { onConflict: 'id' }); 
 
-        if (updateError) {
-            console.error("Erreur de mise à jour de la table 'profiles':", updateError); // LOG
-            throw updateError;
-        }
+        if (updateError) throw updateError;
         
-        console.log("Mise à jour de la DB réussie."); // LOG
-
         // --- 3. MISE À JOUR DE L'ÉTAT LOCAL APRÈS SUCCÈS ---
         setUserProfile((prevProfile) => ({
             ...prevProfile!,
             pseudo: newPseudo,
             avatar: newAvatarUrl,
+            status: userStatus, // Mise à jour du statut dans l'objet profil local
         }));
 
-        // 4. Retour à la vue de chat
         setCurrentView('chat');
         
     } catch (error) {
-        console.error("Échec persistant de la sauvegarde, voir les logs ci-dessus.", error);
-        // Utilisation de JSON.stringify pour afficher les erreurs d'objets Supabase
+        console.error("Échec persistant de la sauvegarde.", error);
         alert(`Une erreur est survenue lors de la sauvegarde du profil. Veuillez vérifier la console pour le message d'erreur détaillé.`);
     } finally {
         setIsLoading(false);
@@ -189,7 +249,7 @@ export default function App() {
   };
 
   // ----------------------------------------------------
-  // ✅ RENDU CONDITIONNEL MIS À JOUR
+  // ✅ RENDU CONDITIONNEL 
   // ----------------------------------------------------
   if (isLoading) {
     return <div className="loading-container">Chargement...</div>;
@@ -217,7 +277,8 @@ export default function App() {
   return (
     <ChatApp 
       user={user} 
-      currentUserProfile={userProfile} // ⭐ AJOUT DE LA PROP MANQUANTE
+      // ⭐ Passage du statut le plus récent (géré par le système d'activité)
+      currentUserProfile={{ ...userProfile, status: userStatus }} 
       onEditProfile={() => setCurrentView('profile_edit')}
       onLogout={handleLogout}
     />

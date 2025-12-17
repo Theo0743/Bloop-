@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 
 // FIX: La dépendance "../utils" n'étant pas résolue, nous définissons
 // le tableau des avatars directement dans ce fichier pour permettre la compilation.
-const avatars: string[] = [
+export const avatars: string[] = [
  "../Avatar/AvatarBleu.webp",
  "../Avatar/AvatarJaune.webp",
  "../Avatar/AvatarMarron.webp",
@@ -35,14 +35,14 @@ const EditProfile: React.FC<ProfileEditModalProps> = ({
     onSave,
     onBack,
 }) => {
-    // Le composant gère maintenant ses états locaux pour l'édition :
+    // États locaux pour l'édition
     const [newUsername, setNewUsername] = useState(currentUser.pseudo);
     // Initialiser avec l'avatar actuel de l'utilisateur ou une valeur par défaut
     const [newAvatar, setNewAvatar] = useState<string | null>(currentUser.avatar || DEFAULT_AVATAR_URL);
     const [newAvatarFile, setNewAvatarFile] = useState<File | null>(null);
     const [isUpdating, setIsUpdating] = useState(false);
 
-    // Initialise les états lors du montage ou si l'utilisateur change
+    // Synchronisation des états si l'utilisateur change ou si le modal s'ouvre/referme
     useEffect(() => {
         setNewUsername(currentUser.pseudo);
         setNewAvatar(currentUser.avatar || DEFAULT_AVATAR_URL);
@@ -61,27 +61,22 @@ const EditProfile: React.FC<ProfileEditModalProps> = ({
             const formData = new FormData();
             formData.append('pseudo', newUsername);
             
-            // Si un nouveau fichier d'avatar a été sélectionné
+            // LOGIQUE CLÉ : On décide quoi envoyer pour l'avatar.
             if (newAvatarFile) {
+                // 1. Si un nouveau fichier a été sélectionné, on l'envoie.
                 formData.append('avatar', newAvatarFile);
-            } else if (avatars.includes(newAvatar || '')) {
-                // Si l'utilisateur a choisi un avatar par défaut
-                // On envoie le chemin d'accès de l'avatar par défaut au parent.
-                // Le parent (App.tsx) doit gérer le fait que ce n'est pas un upload de fichier.
-                formData.append('avatar', newAvatar as string); 
             } else {
-                // Si l'avatar est l'ancien avatar Supabase (non changé) ou null, 
-                // on envoie une chaîne vide ou l'URL existante si l'API le permet.
-                // La logique dans App.tsx est déjà configurée pour conserver l'ancienne URL si 'newAvatar' est null ou vide.
-                // On envoie l'URL existante pour indiquer qu'il n'y a pas de changement de fichier uploadé.
+                // 2. Sinon, on envoie l'URL/chemin actuel stocké dans newAvatar.
+                // Cela peut être :
+                // a) Un chemin d'avatar par défaut (ex: "../Avatar/AvatarBleu.webp")
+                // b) L'ancienne URL Supabase (si l'utilisateur a cliqué, mais pas uploadé)
+                // C'est au composant parent (onSave) de faire la distinction.
                 formData.append('avatar', newAvatar || ''); 
             }
             
             await onSave(formData);
         } catch (e) {
-            console.error(e);
-            // Utilisation d'une boîte de dialogue personnalisée au lieu d'alert()
-            // (Note: pour cet exercice, l'alert est conservé selon les instructions précédentes)
+            console.error("Erreur lors de la soumission du profil:", e);
             alert("Erreur lors de la soumission du profil. Voir console.");
         } finally {
             setIsUpdating(false);
@@ -113,18 +108,15 @@ const EditProfile: React.FC<ProfileEditModalProps> = ({
             {/* BLOC: PRÉVISUALISATION DE L'AVATAR EN COURS */}
             <div style={{ textAlign: 'center', marginBottom: '10px' }}>
                 <img 
-                    // Utilise l'état newAvatar (URL d'upload ou chemin par défaut)
                     src={newAvatar || DEFAULT_AVATAR_URL} 
                     alt="Aperçu de l'avatar"
                     style={{ width: '80px', height: '80px', borderRadius: '50%', objectFit: 'cover', border: '3px solid #5865f2' }}
-                    // Gérer l'erreur de chargement pour les URL de fichiers temporaires
                     onError={(e) => {
                         e.currentTarget.src = DEFAULT_AVATAR_URL;
                         e.currentTarget.onerror = null; 
                     }}
                 />
             </div>
-            {/* FIN DU BLOC DE PRÉVISUALISATION */}
 
             {/* CHAMP NOM D'UTILISATEUR */}
             <div>
@@ -179,7 +171,7 @@ const EditProfile: React.FC<ProfileEditModalProps> = ({
                             // Utiliser l'URL temporaire pour la prévisualisation immédiate
                             setNewAvatar(URL.createObjectURL(file)); 
                         } else {
-                             // Si l'utilisateur annule la sélection du fichier, revenir à l'ancien état
+                             // Si l'utilisateur annule la sélection, revenir à l'état précédent
                              setNewAvatar(currentUser.avatar || DEFAULT_AVATAR_URL);
                         }
                     }}

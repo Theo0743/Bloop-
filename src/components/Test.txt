@@ -153,13 +153,7 @@ const getOrderedUserIds = (id1: string, id2: string): [string, string] => {
     return id1 < id2 ? [id1, id2] : [id2, id1];
 };
 
-const formatTime = (dateString: string) => {
-  return new Date(dateString).toLocaleTimeString('fr-FR', {
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: 'Europe/Paris' // Force l'heure française
-  });
-};
+
 // -----------------------------------------------------
 // 3. LE COMPOSANT ChatApp
 // -----------------------------------------------------
@@ -1326,7 +1320,7 @@ const handleClickUser = (message: any) => {
                 display: 'flex',
                 flexDirection: 'column'
             }}>
-                
+                <h2 style={{ color: '#fff', marginBottom: '20px' }}>Créer un nouveau Serveur de Groupe</h2>
                 
                 {/* Nom du Serveur */}
                 <input
@@ -1567,6 +1561,28 @@ const handleClickUser = (message: any) => {
                 </div>
             ))}
             
+            {/* --- SECTION DES SERVEURS DE GROUPE --- */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', marginTop: '20px', borderTop: '1px solid #1e2022', paddingTop: '10px' }}> 
+                <h3 style={{ color: '#fff', fontSize: '14px' }}>Serveurs de Groupe</h3>
+                
+                {/* BOUTON : Créer un serveur/groupe */}
+                <button 
+                    onClick={() => setIsCreateServerModalOpen(true)}
+                    style={{ 
+                        backgroundColor: '#56aaff', 
+                        color: 'white', 
+                        border: 'none', 
+                        borderRadius: '4px',
+                        padding: '3px 8px',
+                        fontSize: '10px',
+                        cursor: 'pointer'
+                    }}
+                    title="Créer un nouveau serveur de groupe"
+                >
+                    + Serveur
+                </button>
+            </div>
+            
             {/* Liste des serveurs de groupe */}
             {groupServers.map((server) => (
                 <div 
@@ -1645,7 +1661,7 @@ const handleClickUser = (message: any) => {
             
             {/* Titre dynamique */}
             <h3 style={{ color: '#fff', fontSize: '14px', padding: '5px 0' }}>
-                {activeServer ? `Canaux de ${activeServer.name}` : 'Canaux Publiques '}
+                {activeServer ? `Canaux de ${activeServer.name}` : 'Canaux Publics (Legacy)'}
             </h3>
             
             {activeServer ? (
@@ -2003,16 +2019,12 @@ const handleClickUser = (message: any) => {
                         </span>
                         )}
                       
-                     <span className="msg-time">
-  {(() => {
-    const d = new Date(m.created_at);
-    d.setHours(d.getHours() + 1); // Ajoute manuellement l'heure manquante
-    return d.toLocaleTimeString('fr-FR', {
-      hour: "2-digit",
-      minute: "2-digit"
-    });
-  })()}
-</span>
+                      <span className="msg-time">
+                        {new Date(m.created_at).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
                     </div>
                     <div className="msg-text">
                         {/* RENDU DE L'IMAGE / FICHIER TÉLÉCHARGÉ */}
