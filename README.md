@@ -62,3 +62,26 @@ Partage multimédia : ChatApp.tsx peut ainsi afficher des images et des GIFs sto
 
 Dossier Avatar : 
 Permet, lors de la création du profil, de choisir son Bloopy par les avatars prédéfini 
+
+Pourquoi utilisé React ?
+1. Gestion d'un État Complexe et Réactif
+React excelle dans la synchronisation de l'interface avec les données changeantes.
+Changement de vue fluide : Dans App.tsx, l'état currentView permet de passer instantanément de l'écran de connexion au chat ou à l'édition de profil sans recharger la page.
+Mise à jour en temps réel : Lorsque vous recevez un message ou qu'un ami change de statut, React ne met à jour que la petite partie de l'interface concernée (le message ou l'indicateur de couleur) grâce au DOM virtuel.
+
+2. Modularité par Composants
+Le projet est découpé en briques logiques réutilisables, ce qui facilite la maintenance.
+Structure organisée : Vous avez des composants dédiés comme AuthPanel pour la sécurité et ChatApp pour l'interface principale.
+Interfaces typées : L'utilisation de TypeScript avec React permet de définir des contrats clairs pour les données (comme les interfaces Friend, Channel ou UserProfile), évitant ainsi de nombreuses erreurs de développement.
+
+3. Hooks pour la Logique Métier
+Les React Hooks permettent d'encapsuler des comportements complexes de manière lisible.
+useEffect : Utilisé dans App.tsx pour surveiller l'activité de l'utilisateur et déclencher le mode "Inactif" (idle) après 5 minutes.
+useMemo et useCallback : Utilisés pour optimiser les performances, par exemple pour filtrer les messages d'un canal spécifique sans recalculer toute l'interface inutilement.
+
+4. Écosystème et Performance
+StrictMode : Comme configuré dans main.tsx, React aide à détecter les bugs potentiels et les fuites de mémoire durant le développement.
+Intégration facilitée : La bibliothèque s'intègre parfaitement avec le SDK de Supabase, permettant de lier facilement les flux de données (Realtime) aux états de vos composants.
+
+5. Rendu Déclaratif
+Au lieu de manipuler manuellement chaque élément HTML (ce qui serait cauchemardesque pour une interface comme celle de ChatApp.tsx), vous décrivez simplement à quoi doit ressembler l'interface en fonction de l'état actuel. React s'occupe de faire correspondre la réalité à votre description.
